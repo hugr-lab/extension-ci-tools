@@ -2,8 +2,6 @@
 // table functions and usage reports.
 //
 // Locking: State::mu guards a state and is never held across HTTP or while opening a connection.
-// DuckDB calls OnConnectionClosed with its connection lock held, so nothing there opens a
-// connection.
 #include "kista/kista.hpp"
 
 #include "duckdb/common/exception.hpp"
@@ -58,10 +56,11 @@ using duckdb::ClientContext;
 using duckdb::DatabaseInstance;
 
 constexpr int64_t FetchTimeout = 5;  // seconds, no retries
-constexpr int64_t SendTimeout = 2;   // a usage report: short, it may run under DuckDB's connection lock
+constexpr int64_t SendTimeout = 5;   // a usage report, no retries
 constexpr int64_t RenewEvery = 3600; // at most one fetch an hour, but for the first use after a deferred load
-constexpr int64_t SendEvery = 600;   // usage: every 10 minutes, or when a connection closes
-constexpr size_t MaxEvents = 32, MaxCounters = 16;
+constexpr size_t MaxCounters = 16;   // a report's event (internal/usage)
+constexpr int MaxInflight = 16;      // SendAsync's reports on their way; more are dropped
+constexpr int64_t MaxValue = (int64_t(1) << 53) - 1;
 
 int64_t Now() {
 	return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch())
@@ -151,16 +150,6 @@ std::string JSONString(const std::string &s) {
 	return out + "\"";
 }
 
-struct Event {
-	int64_t count = 0;
-	std::map<std::string, int64_t> counters;
-};
-
-int64_t Add(int64_t a, int64_t b) {
-	const int64_t max = (int64_t(1) << 53) - 1;
-	return b <= 0 ? a : (a > max - b ? max : a + b);
-}
-
 // State is one extension's licence and usage in one database.
 struct State {
 	std::string name;
@@ -175,15 +164,9 @@ struct State {
 	bool fetching = false;      // a fetch runs (outside mu): no second one
 	bool fetch_pending = false; // the last fetch got no answer that settles it
 	// the fetch at load got no answer: the user's session may hold what it needs (its TLS settings, a
-	// secret it can see), so the first Get asks once more with the user's context, and the load event
-	// waits for it
+	// secret it can see), so the first Get asks once more with the user's context
 	bool retry_once = false;
-	bool load_pending = false;
 	bool warned_grace = false;
-	// usage, by the licence status at the time of the event
-	std::map<std::string, std::map<std::string, Event>> events;
-	int64_t last_send = 0;
-	int64_t send_backoff_until = 0;
 
 	std::string FilePath() const {
 		return module_dir.empty() ? "" : module_dir + "/" + name + ".kista-license";
@@ -364,7 +347,7 @@ void Fetch(State &s, ClientContext &context) {
 }
 
 // WithContext runs f with a connection of its own, in a transaction (there is no user query to
-// ride on). Never under DuckDB's connection lock (OnConnectionClosed).
+// ride on).
 void WithContext(DatabaseInstance &db, const std::function<void(ClientContext &)> &f) {
 	try {
 		duckdb::Connection con(db);
@@ -373,65 +356,37 @@ void WithContext(DatabaseInstance &db, const std::function<void(ClientContext &)
 	}
 }
 
-// CountLocked adds to an event under the licence status now (mu held).
-void CountLocked(State &s, const std::string &event, const std::map<std::string, int64_t> &counters, int64_t now) {
-	auto &bucket = s.events[StatusName(CurrentStatus(s, now))];
-	if (bucket.size() >= MaxEvents && !bucket.count(event)) {
-		return;
+// Report is a usage report of one event, under the licence status now; "" when there is no version
+// or the event or a counter breaks the report's rules (internal/usage), which the repository would
+// refuse (mu held).
+std::string Report(const State &s, const std::string &event, const std::map<std::string, int64_t> &counters) {
+	if (s.version.empty() || !IsName(event) || counters.size() > MaxCounters) {
+		return "";
 	}
-	auto &e = bucket[event];
-	e.count = Add(e.count, 1);
-	for (auto &c : counters) {
-		if (IsName(c.first) && (e.counters.size() < MaxCounters || e.counters.count(c.first))) {
-			e.counters[c.first] = Add(e.counters[c.first], c.second);
-		}
+	std::string b = "{\"version\":" + JSONString(s.version) + ",\"platform\":" + JSONString(duckdb::DuckDB::Platform()) +
+	                ",\"duckdb_version\":" + JSONString(duckdb::DuckDB::LibraryVersion());
+	if (s.result.has_claims && !s.token.empty()) {
+		b += ",\"license\":" + JSONString(s.result.claims.id);
 	}
-}
-
-// TakeReports builds the usage reports, one per licence status, and empties the counts (mu held).
-std::vector<std::string> TakeReports(State &s, int64_t now) {
-	if (s.load_pending) {
-		CountLocked(s, "load", {}, now); // a deferred load is counted as it stands now
-		s.load_pending = false;
-	}
-	s.last_send = now;
-	std::vector<std::string> out;
-	if (s.repo.empty()) {
-		s.events.clear();
-		return out;
-	}
-	for (auto &bucket : s.events) {
-		std::string b = "{\"version\":" + JSONString(s.version) + ",\"platform\":" +
-		                JSONString(duckdb::DuckDB::Platform()) +
-		                ",\"duckdb_version\":" + JSONString(duckdb::DuckDB::LibraryVersion());
-		if (s.result.has_claims && !s.token.empty()) {
-			b += ",\"license\":" + JSONString(s.result.claims.id);
-		}
-		b += ",\"status\":" + JSONString(bucket.first) + ",\"events\":[";
+	b += ",\"status\":" + JSONString(StatusName(CurrentStatus(s, Now()))) + ",\"events\":[{\"name\":" +
+	     JSONString(event) + ",\"count\":1";
+	if (!counters.empty()) {
+		b += ",\"counters\":{";
 		bool first = true;
-		for (auto &e : bucket.second) {
-			b += std::string(first ? "" : ",") + "{\"name\":" + JSONString(e.first) +
-			     ",\"count\":" + std::to_string(e.second.count);
-			first = false;
-			if (!e.second.counters.empty()) {
-				b += ",\"counters\":{";
-				bool f2 = true;
-				for (auto &c : e.second.counters) {
-					b += std::string(f2 ? "" : ",") + JSONString(c.first) + ":" + std::to_string(c.second);
-					f2 = false;
-				}
-				b += "}";
+		for (auto &c : counters) {
+			if (!IsName(c.first) || c.second < 0 || c.second > MaxValue) {
+				return "";
 			}
-			b += "}";
+			b += std::string(first ? "" : ",") + JSONString(c.first) + ":" + std::to_string(c.second);
+			first = false;
 		}
-		out.push_back(b + "]}");
+		b += "}";
 	}
-	s.events.clear();
-	return out;
+	return b + "}]}";
 }
 
-// Send posts a report; false when no answer came (the repository unreachable).
-bool Send(ClientContext &context, const std::string &url, const std::string &body) {
+// Post sends a report; true when the repository took it (2xx).
+bool Post(ClientContext &context, const std::string &url, const std::string &body) {
 	try {
 		auto &db = DatabaseInstance::GetDatabase(context);
 		auto session = Session(context, url, SendTimeout);
@@ -440,28 +395,15 @@ bool Send(ClientContext &context, const std::string &url, const std::string &bod
 		duckdb::PostRequestInfo req(url, headers, session.Parameters(), duckdb::const_data_ptr_cast(body.data()),
 		                            body.size());
 		req.try_request = true;
-		auto resp = session.Request(req); // best effort: whatever the answer, the counts are gone
-		return resp && !resp->HasRequestError();
+		auto resp = session.Request(req);
+		return resp && !resp->HasRequestError() && int(resp->status) >= 200 && int(resp->status) < 300;
 	} catch (...) {
 		return false;
 	}
 }
 
-// SendAll sends the reports; when one gets no answer the rest are dropped, and sends wait 10
-// minutes (no stall at every close while the repository is unreachable).
-void SendAll(State &s, ClientContext &context, const std::vector<std::string> &bodies) {
-	auto url = s.repo + "/-/usage/" + s.name;
-	for (auto &b : bodies) {
-		if (!Send(context, url, b)) {
-			std::lock_guard<std::mutex> l(s.mu);
-			s.send_backoff_until = Now() + SendEvery;
-			return;
-		}
-	}
-}
-
-// Background sends (the 10-minute one) hold the database only while sending, and finish before the
-// process exits: an atexit handler waits for them, briefly.
+// SendAsync's reports hold the database until they are sent (a database closed meanwhile closes
+// after them), and the process waits for them at exit, briefly.
 std::mutex inflight_mu;
 std::condition_variable inflight_cv;
 int inflight = 0;
@@ -471,22 +413,21 @@ void WaitInflight() {
 	inflight_cv.wait_for(l, std::chrono::seconds(SendTimeout + 1), [] { return inflight == 0; });
 }
 
-void SendInBackground(DatabaseInstance &db, std::shared_ptr<State> s, std::vector<std::string> bodies) {
-	static std::once_flag once;
-	std::call_once(once, [] { std::atexit(WaitInflight); });
-	duckdb::weak_ptr<DatabaseInstance> weak = db.shared_from_this();
-	{
-		std::lock_guard<std::mutex> l(inflight_mu);
-		inflight++;
+// Prepare finds the extension's state and builds the report; false when there is nowhere to send it
+// or the report breaks the rules.
+bool Prepare(DatabaseInstance &db, const std::string &name, const std::string &event,
+             const std::map<std::string, int64_t> &counters, std::string &url, std::string &body) {
+	auto s = Find(db, name);
+	if (!s) {
+		return false;
 	}
-	std::thread([weak, s, bodies] {
-		if (auto dbp = weak.lock()) {
-			WithContext(*dbp, [&](ClientContext &c) { SendAll(*s, c, bodies); });
-		}
-		std::lock_guard<std::mutex> l(inflight_mu);
-		inflight--;
-		inflight_cv.notify_all();
-	}).detach();
+	std::lock_guard<std::mutex> l(s->mu);
+	if (s->repo.empty()) {
+		return false;
+	}
+	url = s->repo + "/-/usage/" + s->name;
+	body = Report(*s, event, counters);
+	return !body.empty();
 }
 
 class Callback : public duckdb::ExtensionCallback {
@@ -521,32 +462,7 @@ public:
 			}
 			WithContext(db, [&](ClientContext &c) { Fetch(*state, c); });
 			std::lock_guard<std::mutex> l(state->mu);
-			if (state->fetch_pending) {
-				state->retry_once = state->load_pending = true;
-			} else {
-				CountLocked(*state, "load", {}, Now());
-			}
-		} catch (...) {
-		}
-	}
-
-	// OnConnectionClosed sends the counts with the closing connection's context, in a transaction of
-	// its own: DuckDB holds its connection lock here, so no connection can be opened. A send is short
-	// (2 seconds), and skipped for 10 minutes after one got no answer.
-	void OnConnectionClosed(ClientContext &context) override {
-		try {
-			std::vector<std::string> bodies;
-			{
-				std::lock_guard<std::mutex> l(state->mu);
-				auto now = Now();
-				if (now < state->send_backoff_until || (state->events.empty() && !state->load_pending)) {
-					return;
-				}
-				bodies = TakeReports(*state, now);
-			}
-			if (!bodies.empty()) {
-				context.RunFunctionInTransaction([&] { SendAll(*state, context, bodies); });
-			}
+			state->retry_once = state->fetch_pending;
 		} catch (...) {
 		}
 	}
@@ -615,12 +531,7 @@ struct Access {
 			Fetch(*s, context);
 		}
 		std::lock_guard<std::mutex> l(s->mu);
-		auto now = Now();
-		if (s->load_pending && !s->fetching) {
-			CountLocked(*s, "load", {}, now);
-			s->load_pending = false;
-		}
-		auto lic = Make(*s, now);
+		auto lic = Make(*s, Now());
 		if (warn && lic.status == Status::Grace && !s->warned_grace) {
 			s->warned_grace = true;
 			duckdb::KistaWarn(context, "the licence for " + name + " is in its grace period until " +
@@ -657,31 +568,52 @@ void License::Check() const {
 	throw duckdb::PermissionException("the licence for %s is invalid: %s", name, message);
 }
 
-void Usage::Count(ClientContext &context, const std::string &name, const std::string &event,
-                  const std::map<std::string, int64_t> &counters) {
-	if (!IsName(event)) {
-		return;
+bool Usage::Send(ClientContext &context, const std::string &name, const std::string &event,
+                 const std::map<std::string, int64_t> &counters) {
+	std::string url, body;
+	if (!Prepare(DatabaseInstance::GetDatabase(context), name, event, counters, url, body)) {
+		return false;
 	}
+	if (context.transaction.HasActiveTransaction()) { // within a query: the query's transaction
+		return Post(context, url, body);
+	}
+	bool ok = false;
+	try {
+		context.RunFunctionInTransaction([&] { ok = Post(context, url, body); });
+	} catch (...) {
+	}
+	return ok;
+}
+
+void Usage::SendAsync(ClientContext &context, const std::string &name, const std::string &event,
+                      const std::map<std::string, int64_t> &counters) {
 	auto &db = DatabaseInstance::GetDatabase(context);
-	auto s = Find(db, name);
-	if (!s) {
+	std::string url, body;
+	if (!Prepare(db, name, event, counters, url, body)) {
 		return;
 	}
-	std::vector<std::string> bodies;
+	static std::once_flag once;
+	std::call_once(once, [] { std::atexit(WaitInflight); });
 	{
-		std::lock_guard<std::mutex> l(s->mu);
-		auto now = Now();
-		CountLocked(*s, event, counters, now);
-		if (s->last_send == 0) {
-			s->last_send = now;
-		}
-		if (now - s->last_send < SendEvery || now < s->send_backoff_until) {
+		std::lock_guard<std::mutex> l(inflight_mu);
+		if (inflight >= MaxInflight) {
 			return;
 		}
-		bodies = TakeReports(*s, now);
+		inflight++;
 	}
-	if (!bodies.empty()) {
-		SendInBackground(db, s, std::move(bodies)); // never on the query path
+	try {
+		auto dbp = db.shared_from_this(); // the report is sent even if the caller closes the database
+		std::thread([dbp, url, body]() mutable {
+			WithContext(*dbp, [&](ClientContext &c) { Post(c, url, body); });
+			dbp.reset();
+			std::lock_guard<std::mutex> l(inflight_mu);
+			inflight--;
+			inflight_cv.notify_all();
+		}).detach();
+	} catch (...) { // no thread
+		std::lock_guard<std::mutex> l(inflight_mu);
+		inflight--;
+		inflight_cv.notify_all();
 	}
 }
 

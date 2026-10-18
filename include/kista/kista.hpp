@@ -7,7 +7,7 @@
 //   auto lic = kista::License::Get(context, "myext");   // cached; never throws for status
 //   lic.Check();                                         // throws unless valid or grace
 //   lic.Limit<int64_t>("max_attached_sources", 1);       // the developer's controls, with a default
-//   kista::Usage::Count(context, "myext", "attach", {{"sources", 3}});
+//   kista::Usage::Send(context, "myext", "attach", {{"sources", 3}});  // or SendAsync
 //
 // Register adds myext_license() and myext_license_refresh(), and reads the licence when the
 // extension finishes loading: the file myext.kista-license beside the extension's module, then the
@@ -100,14 +100,32 @@ private:
 	static const std::string empty;
 };
 
+// Usage sends usage reports to the repository the extension was installed from, with the http
+// secret matching the report's URL (normally the one INSTALL used): one call, one report of one event (a count of 1) with its counters, under the
+// licence status of the moment. The SDK keeps nothing: when, how often and what to aggregate is the
+// extension's decision, and a report that fails is gone. Event and counter names are
+// [a-z][a-z0-9_.]{0,63}, at most 16 counters, values within 0..2^53-1; a report that breaks these is
+// not sent. Nothing is sent when Register was not called, the extension has no version or the extension was not installed from
+// an http repository. The status is what the SDK knows at the time: after a load whose fetch was
+// deferred, it settles at the first License::Get.
 class Usage {
 public:
-	// Count adds one to an event and the counters to its counters, under the licence status of the
-	// moment. Counts are summed in memory and sent to the repository when a connection closes, or by
-	// the first Count 10 minutes after the last send, from a thread of its own; best effort: a failed
-	// send is dropped. Names are [a-z][a-z0-9_.]{0,63}; others are ignored.
-	static void Count(duckdb::ClientContext &context, const std::string &name, const std::string &event,
-	                  const std::map<std::string, int64_t> &counters = {});
+	// Send sends the report now, with the caller's context (a 5-second connect and stall timeout, no
+	// retries), and waits for the answer; true when the repository answered 2xx (delivered: kista
+	// also answers 204 to a report it drops, an unserved version say).
+	// Call it from the thread running the context's query (a function's bind or execution) or with
+	// no query running, never from a ClientContextState callback (QueryEnd, say), where DuckDB holds
+	// the context's lock: use SendAsync there.
+	static bool Send(duckdb::ClientContext &context, const std::string &name, const std::string &event,
+	                 const std::map<std::string, int64_t> &counters = {});
+	// SendAsync sends the report from a thread of its own, with a connection of its own (global
+	// settings and temporary or persistent secrets, not the caller's session settings or a
+	// connection-scoped secret), and returns at once. With 16 of the extension's reports on their way
+	// in the process, it drops this one, silently. A report keeps the database open until it is sent
+	// (a database closed meanwhile closes after it); at exit the process waits up to 6 seconds for
+	// them.
+	static void SendAsync(duckdb::ClientContext &context, const std::string &name, const std::string &event,
+	                      const std::map<std::string, int64_t> &counters = {});
 };
 
 } // namespace kista
