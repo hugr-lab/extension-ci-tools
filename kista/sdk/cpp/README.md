@@ -1,8 +1,11 @@
 # kista SDK for C++ DuckDB extensions
 
-An extension embeds this library to check its licence and to report how it is used (spec 0012,
-`specs/0012-licensing/spec.md`). Apache-2.0, like the rest of this repository. Written against
-DuckDB at `e2e/DUCKDB_PIN`; tested on Linux and macOS.
+An extension embeds this library to check its licence and to report how it is used (kista's specs
+0012 and 0021, in [hugr-lab/duckdb-extension-repository](https://github.com/hugr-lab/duckdb-extension-repository)).
+It lives in hugr-lab's fork of extension-ci-tools with the rest of the developer kit (kista spec
+0022; see [KISTA.md](../../../KISTA.md)). Apache-2.0. Version: [VERSION](VERSION), tagged
+`sdk-v<version>`, and `kista::SdkVersion()` at run time. Written against DuckDB at
+`kista/DUCKDB_PIN`; tested on Linux and macOS.
 
 ## Using it
 
@@ -84,14 +87,22 @@ When the extension finishes loading:
 From an extension built with DuckDB's CMake (the extension template, or DuckDB's own tree):
 
 ```cmake
-add_subdirectory(path/to/sdk/cpp kista_sdk)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extension-ci-tools/kista/sdk/cpp kista_sdk)
 target_link_libraries(myext_loadable_extension kista_sdk)
 target_link_libraries(myext_extension kista_sdk)
 kista_sdk_license_keys(myext_loadable_extension ${CMAKE_CURRENT_SOURCE_DIR}/license-key.pem)
 kista_sdk_license_keys(myext_extension          ${CMAKE_CURRENT_SOURCE_DIR}/license-key.pem)
 ```
 
-`kista_sdk_license_keys` names the target's licence keys (below). The library uses DuckDB's
+`kista_sdk_license_keys` names the target's licence keys (below). A build takes them from
+`KISTA_LICENSE_KEYS` when it is set (`makefiles/kista.Makefile`; Enterest's builders set it):
+
+```cmake
+set(KISTA_LICENSE_KEYS "${CMAKE_CURRENT_SOURCE_DIR}/license-key.pem" CACHE STRING "licence keys (PEM, ;-separated)")
+kista_sdk_license_keys(myext_loadable_extension ${KISTA_LICENSE_KEYS})
+kista_sdk_license_keys(myext_extension          ${KISTA_LICENSE_KEYS})
+```
+ The library uses DuckDB's
 bundled mbedtls (`duckdb_mbedtls`) for SHA-256 and the signature, and DuckDB itself; nothing else.
 `test/extension` is a complete example: `kista_demo`, which the e2e cases run.
 
@@ -119,17 +130,22 @@ The SDK holds no keys: each build names the keys its licences are signed with (s
     old version's binaries.
 - **Test key.** The `kista_sdk_testkey` library is the key block of the licence vectors' test-only
   key (`test/keys/test-only-2048.pub.pem`; its private half is
-  `internal/license/testdata/test-only-2048.pem`, in this repository).
+  `test/vectors/test-only-2048.pem`, a copy of kista's `internal/license/testdata`).
   - A test extension links `kista_sdk_testkey` instead of calling `kista_sdk_license_keys`, as
     `kista_demo` does.
-  - `go run ./internal/license/vectorgen sign -claims <file>` signs licences for it.
+  - In a kista checkout, `go run ./internal/license/vectorgen sign -claims <file>` signs licences
+    for it.
   - `kista::TrustsTestKey()` lets a release build assert that it does not trust the test key, and
     `Register` logs a warning when it does.
 
 ## Tests
 
 ```bash
-make e2e-duckdb   # DuckDB at e2e/DUCKDB_PIN, kista_demo with it; fills e2e/.build/sdk
-make sdk-test     # every licence vector through the C++ verifier; key blocks and their checks
-make e2e          # kista_demo against kista serve (e2e/sdk_test.go), with the rest of the e2e
+kista/scripts/sdk-test.sh <out>   # DuckDB at kista/DUCKDB_PIN with kista_demo, then every licence
+                                  # vector through the C++ verifier, key blocks and their checks
 ```
+
+kista's e2e builds `kista_demo` from this directory, at the commit its `e2e/CI_TOOLS_PIN` names, and
+runs it against `kista serve`. The vectors in `test/vectors` are a copy of kista's
+`internal/license/testdata`, from the commit in `test/vectors/FROM`: kista's copy is the source.
+`kista/scripts/kista-vectors.sh <kista checkout>` updates the copy, and CI checks it.

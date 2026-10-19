@@ -69,6 +69,10 @@ bool TrustsTestKey() {
 	return Keys::Trusted().Find(kTestKid) != nullptr;
 }
 
+const char *SdkVersion() {
+	return KISTA_SDK_VERSION;
+}
+
 // The block's keys and what is wrong with them, read once.
 struct Block {
 	Keys keys;

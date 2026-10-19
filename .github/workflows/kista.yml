@@ -1,0 +1,84 @@
+# What hugr-lab's fork adds (kista spec 0022): the kista C++ SDK's tests against DuckDB at
+# kista/DUCKDB_PIN, the publication script's tests, and the licence vectors against kista's.
+name: kista
+on:
+  push:
+    branches: [main]
+    paths: [kista/**, scripts/kista_publish.py, scripts/test_kista_publish.py, makefiles/kista.Makefile,
+      .github/workflows/kista.yml, .github/workflows/_kista_publish.yml]
+  pull_request:
+    paths: [kista/**, scripts/kista_publish.py, scripts/test_kista_publish.py, makefiles/kista.Makefile,
+      .github/workflows/kista.yml, .github/workflows/_kista_publish.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kista-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish-script:
+    name: publication script
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - run: python3 -W error::ResourceWarning -m unittest scripts/test_kista_publish.py
+
+  vectors:
+    name: licence vectors
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: kista at the vectors' FROM commit
+        run: |
+          git init -q "$RUNNER_TEMP/kista"
+          git -C "$RUNNER_TEMP/kista" fetch -q --depth 1 https://github.com/hugr-lab/duckdb-extension-repository "$(cat kista/sdk/cpp/test/vectors/FROM)"
+          git -C "$RUNNER_TEMP/kista" checkout -q FETCH_HEAD
+      - run: kista/scripts/kista-vectors.sh "$RUNNER_TEMP/kista" check
+
+  sdk:
+    name: SDK (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    env:
+      CCACHE_MAXSIZE: 2G
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: build dependencies (linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ninja-build ccache libssl-dev
+      - name: build dependencies (macos)
+        if: runner.os == 'macOS'
+        run: brew install ninja ccache openssl@3
+      - name: cache key
+        id: key
+        run: |
+          echo "CCACHE_DIR=$RUNNER_TEMP/ccache" >> "$GITHUB_ENV"
+          pin=$(cat kista/DUCKDB_PIN | openssl dgst -sha256 | awk '{print substr($NF,1,16)}')
+          echo "ccache=ccache-kista-sdk-${{ runner.os }}-${{ runner.arch }}-$pin" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: ${{ steps.key.outputs.ccache }}-${{ github.sha }}
+          restore-keys: ${{ steps.key.outputs.ccache }}-
+      - name: DuckDB at the pin, then the SDK's tests
+        run: kista/scripts/sdk-test.sh "$RUNNER_TEMP/build"
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: always()
+        with:
+          path: ${{ runner.temp }}/ccache
+          key: ${{ steps.key.outputs.ccache }}-${{ github.sha }}

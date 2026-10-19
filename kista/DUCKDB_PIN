@@ -1,0 +1,4 @@
+# DuckDB commit the kista SDK is tested against (full hash; the tag is informational): the same as
+# kista's e2e/DUCKDB_PIN.
+DUCKDB_COMMIT=eb0d9df48ee5341ea4ede1a3cba93251cce571df
+DUCKDB_TAG=v2.0-cyanoptera

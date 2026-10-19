@@ -77,6 +77,9 @@ std::string Fingerprint(const std::string &pem);
 // its PEM given to kista_sdk_license_keys): an extension's release build can assert that it does not.
 bool TrustsTestKey();
 
+// SdkVersion is this SDK's version (kista/sdk/cpp/VERSION, tagged sdk-v<version>).
+const char *SdkVersion();
+
 // KeyBlockProblem says what is wrong with this build's licence key block (a key that is skipped, a
 // key named twice, a block that does not parse), or "": Register logs it as a warning.
 std::string KeyBlockProblem();

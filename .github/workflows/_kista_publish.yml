@@ -1,0 +1,82 @@
+# Publishes a distribution build's artifacts to a kista channel (hugr-lab's fork; kista spec 0022).
+#
+# Call it after _extension_distribution.yml (DuckDB's or this fork's), in a job that may request an
+# OIDC token:
+#
+#   kista:
+#     needs: build
+#     if: startsWith(github.ref, 'refs/tags/v')
+#     permissions: {id-token: write, contents: read}
+#     uses: hugr-lab/extension-ci-tools/.github/workflows/_kista_publish.yml@main
+#     with: {extension_name: myext, kista_url: '${{ vars.KISTA_URL }}', tenant: '${{ vars.KISTA_TENANT }}',
+#            channel: '${{ vars.KISTA_CHANNEL }}'}
+#     secrets: {KISTA_API_KEY: '${{ secrets.KISTA_API_KEY }}'}   # optional: OIDC without it
+#
+# Each built file goes to kista as it is; kista checks it and signs it with the channel's key. wasm
+# builds are skipped while kista does not take them. With OIDC, the token's workflow_ref names the
+# calling workflow, which is what the publisher's GitHub binding in kista names.
+name: Publish to kista
+on:
+  workflow_call:
+    inputs:
+      extension_name:
+        required: true
+        type: string
+      kista_url:
+        description: the kista's public URL (serve.public_url)
+        required: true
+        type: string
+      tenant:
+        required: true
+        type: string
+      channel:
+        required: true
+        type: string
+      visibility:
+        description: private (kista's default) or public
+        required: false
+        type: string
+        default: private
+      artifact_postfix:
+        description: as _extension_distribution.yml's
+        required: false
+        type: string
+        default: ""
+      ci_tools_version:
+        description: the ref of hugr-lab/extension-ci-tools to take the publication script from
+        required: false
+        type: string
+        default: main
+    secrets:
+      KISTA_API_KEY:
+        description: a publisher's API key; without it, GitHub's OIDC token (the caller grants id-token write)
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: kista ${{ inputs.tenant }}/${{ inputs.channel }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          repository: hugr-lab/extension-ci-tools
+          ref: ${{ inputs.ci_tools_version }}
+          path: extension-ci-tools
+          persist-credentials: false
+
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: ${{ inputs.extension_name }}-*-extension-*${{ inputs.artifact_postfix }}
+          path: artifacts
+
+      - name: Publish
+        env:
+          KISTA_API_KEY: ${{ secrets.KISTA_API_KEY }}
+        run: |
+          python3 extension-ci-tools/scripts/kista_publish.py --url '${{ inputs.kista_url }}' \
+            --tenant '${{ inputs.tenant }}' --channel '${{ inputs.channel }}' --visibility '${{ inputs.visibility }}' \
+            --summary "$GITHUB_STEP_SUMMARY" artifacts

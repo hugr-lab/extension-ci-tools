@@ -3,6 +3,7 @@
 #include "kista/license.hpp"
 
 #include <iostream>
+#include <string>
 
 // an RSA-2048 public key with e = 3, which kista refuses
 static const char *const E3Key =
@@ -19,6 +20,11 @@ static const char *const E3Key =
 int main() {
 	if (kista::TrustsTestKey()) {
 		std::cerr << "the target trusts the test key\n";
+		return 1;
+	}
+	// the version compiled in is the VERSION file's (KISTA_SDK_VERSION_FILE, given by CMake)
+	if (std::string(kista::SdkVersion()) != KISTA_SDK_VERSION_FILE) {
+		std::cerr << "SdkVersion() is " << kista::SdkVersion() << ", the VERSION file says " << KISTA_SDK_VERSION_FILE << "\n";
 		return 1;
 	}
 	// the vectors' first case, signed with the test key

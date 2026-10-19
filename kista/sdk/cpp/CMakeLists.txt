@@ -3,13 +3,13 @@
 # - From an extension built with DuckDB's CMake (the extension template, or DuckDB's own tree):
 #   add_subdirectory(<this directory> kista_sdk) and link kista_sdk; DuckDB's include directories
 #   and its duckdb_mbedtls target are already there.
-# - Standalone, for the SDK's own tests: -DKISTA_DUCKDB_DEPS=<dir>, the directory build-duckdb.sh
-#   fills with DuckDB's headers and libraries at e2e/DUCKDB_PIN (e2e/.build/sdk).
+# - Standalone, for the SDK's own tests: -DKISTA_DUCKDB_DEPS=<dir>, the directory
+#   kista/scripts/build-duckdb.sh fills with DuckDB's headers and libraries at kista/DUCKDB_PIN.
 #
 # kista_sdk holds no licence keys: each target that links it names its own with
 # kista_sdk_license_keys(<target> <pem>...) (cmake/KistaLicenseKeys.cmake, spec 0021), or, for tests,
 # links kista_sdk_testkey instead: the key block of the licence vectors' test-only key, whose private
-# half is in this repository.
+# half is in test/vectors (a copy of kista's internal/license/testdata).
 cmake_minimum_required(VERSION 3.16)
 project(kista_sdk CXX)
 
@@ -22,6 +22,8 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/KistaLicenseKeys.cmake)
 
 add_library(kista_sdk STATIC src/json.cpp src/license.cpp src/crypto.cpp src/keys.cpp src/sdk.cpp)
+file(STRINGS ${CMAKE_CURRENT_SOURCE_DIR}/VERSION KISTA_SDK_VERSION LIMIT_COUNT 1)
+target_compile_definitions(kista_sdk PRIVATE KISTA_SDK_VERSION="${KISTA_SDK_VERSION}")
 target_include_directories(kista_sdk PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # hidden: an extension's SDK (its keys, its state) is its own, never bound to another module's copy
 set_target_properties(kista_sdk PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
@@ -47,11 +49,12 @@ if(KISTA_DUCKDB_DEPS)
   enable_testing()
   add_executable(kista_sdk_vectors test/vectors_test.cpp)
   target_link_libraries(kista_sdk_vectors PRIVATE kista_sdk_testkey)
-  add_test(NAME vectors COMMAND kista_sdk_vectors ${CMAKE_CURRENT_SOURCE_DIR}/../../internal/license/testdata/vectors.json)
+  add_test(NAME vectors COMMAND kista_sdk_vectors ${CMAKE_CURRENT_SOURCE_DIR}/test/vectors/vectors.json)
   # a build with keys of its own trusts them, and no test key; built in the same tree as the vectors'
   add_executable(kista_sdk_trust test/trust_test.cpp)
   target_link_libraries(kista_sdk_trust PRIVATE kista_sdk)
   kista_sdk_license_keys(kista_sdk_trust ${CMAKE_CURRENT_SOURCE_DIR}/test/keys/test-only-untrusted-2048.pub.pem)
+  target_compile_definitions(kista_sdk_trust PRIVATE KISTA_SDK_VERSION_FILE="${KISTA_SDK_VERSION}")
   add_test(NAME trust COMMAND kista_sdk_trust)
   # a static target with keys (an extension's static library) links into a binary: its block is
   # pulled in though nothing of its own refers to it
@@ -65,6 +68,7 @@ if(KISTA_DUCKDB_DEPS)
   # executable, and a shared library (on Linux it may leave symbols undefined, but not a hidden one)
   add_executable(kista_sdk_nokeys EXCLUDE_FROM_ALL test/trust_test.cpp)
   target_link_libraries(kista_sdk_nokeys PRIVATE kista_sdk)
+  target_compile_definitions(kista_sdk_nokeys PRIVATE KISTA_SDK_VERSION_FILE="${KISTA_SDK_VERSION}")
   add_library(kista_sdk_nokeys_shared SHARED EXCLUDE_FROM_ALL test/nokeys_shared.cpp)
   target_link_libraries(kista_sdk_nokeys_shared PRIVATE kista_sdk)
   foreach(t kista_sdk_nokeys kista_sdk_nokeys_shared)
@@ -80,7 +84,7 @@ if(KISTA_DUCKDB_DEPS)
       "ok|${keys}/crlf.pub.pem"
       "bad|${keys}/wrapped76.pub.pem"
       "bad|${keys}/two-blocks.pub.pem"
-      "bad|${CMAKE_CURRENT_SOURCE_DIR}/../../internal/license/testdata/test-only-2048.pem"
+      "bad|${CMAKE_CURRENT_SOURCE_DIR}/test/vectors/test-only-2048.pem"
       "bad|${keys}/missing.pem"
       "bad|${keys}/test-only-2048.pub.pem,${keys}/crlf.pub.pem"
       "bad|${keys}/big.pub.pem"
