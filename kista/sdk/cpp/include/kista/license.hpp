@@ -1,5 +1,5 @@
 // kista SDK (spec 0012): a licence, its verifier and its status. This part uses no DuckDB type: it is
-// the C++ twin of internal/license, checked against the same vectors (testdata/vectors.json).
+// the C++ twin of kista's internal/license, checked against the same vectors (test/vectors).
 #pragma once
 
 #include <cstdint>

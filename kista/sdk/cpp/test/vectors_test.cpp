@@ -1,5 +1,5 @@
-// Checks the C++ verifier against spec 0012's licence vectors (internal/license/testdata/vectors.json,
-// written by go run ./internal/license/vectorgen): each token's status, the rule an invalid one
+// Checks the C++ verifier against kista's spec 0012 licence vectors (test/vectors/vectors.json, a
+// copy of kista's internal/license/testdata, written there by go run ./internal/license/vectorgen): each token's status, the rule an invalid one
 // breaks, and the claims of the others, exactly as the Go reference verifier reads them.
 //
 //   kista_sdk_vectors <vectors.json>

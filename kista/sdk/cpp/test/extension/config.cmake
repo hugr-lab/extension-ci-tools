@@ -1,4 +1,4 @@
-# DuckDB's extension config for kista_demo (e2e/build-duckdb.sh): built as a loadable extension;
+# DuckDB's extension config for kista_demo (kista/scripts/sdk-test.sh here, and kista's e2e/build-duckdb.sh): built as a loadable extension;
 # never linked into DuckDB, whose STATICALLY_LINK_EXTENSIONS names core_functions only.
 duckdb_extension_load(kista_demo
     SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}

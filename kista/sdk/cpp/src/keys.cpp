@@ -24,7 +24,7 @@ namespace {
 // build wrote, never constants the optimiser reasoned about.
 const unsigned char *volatile key_block = kista_sdk_license_keys;
 
-// The test key's fingerprint (sdk/cpp/test/keys/test-only-2048.pub.pem, the licence vectors' key).
+// The test key's fingerprint (test/keys/test-only-2048.pub.pem, the licence vectors' key).
 const char *const kTestKid = "sha256:770bd4b7176dd31c2c123d6dc69856fb2a398ea823dcac6f5db7af11d139d552";
 
 // The magic, XORed with 0x5a: the SDK checks the block starts with it without holding it, so the

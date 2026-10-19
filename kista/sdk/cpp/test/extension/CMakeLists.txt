@@ -1,5 +1,6 @@
 # kista_demo: a C++ extension built with the kista SDK and the test key, for the e2e cases (spec
-# 0012 phase 2). It is built in DuckDB's tree at the pin (e2e/build-duckdb.sh, through config.cmake).
+# 0012 phase 2). It is built in DuckDB's tree at the pin (kista/scripts/sdk-test.sh, and kista's
+# e2e/build-duckdb.sh, through config.cmake).
 cmake_minimum_required(VERSION 3.16)
 project(KistaDemoExtension CXX)
 

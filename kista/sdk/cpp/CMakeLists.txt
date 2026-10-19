@@ -4,7 +4,7 @@
 #   add_subdirectory(<this directory> kista_sdk) and link kista_sdk; DuckDB's include directories
 #   and its duckdb_mbedtls target are already there.
 # - Standalone, for the SDK's own tests: -DKISTA_DUCKDB_DEPS=<dir>, the directory
-#   kista/scripts/build-duckdb.sh fills with DuckDB's headers and libraries at kista/DUCKDB_PIN.
+#   kista/scripts/sdk-test.sh fills with DuckDB's headers and libraries at kista/DUCKDB_PIN.
 #
 # kista_sdk holds no licence keys: each target that links it names its own with
 # kista_sdk_license_keys(<target> <pem>...) (cmake/KistaLicenseKeys.cmake, spec 0021), or, for tests,

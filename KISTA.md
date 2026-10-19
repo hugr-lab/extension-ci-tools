@@ -17,7 +17,7 @@ CI. The design is kista's spec 0022 (`specs/0022-developer-kit/spec.md`).
   - It is not built by the community.
   - Enterest builds it from git with the same Makefile.
 
-hugr-lab's [extension template](https://github.com/hugr-lab/extension-template) sets up either kind.
+hugr-lab's extension template (kista spec 0022, phase 2) will set up either kind.
 
 ## What the fork adds
 
@@ -47,8 +47,9 @@ make release KISTA_LICENSE_KEYS='/path/key1.pem;/path/key2.pem'
 make test
 ```
 
-- `KISTA_LICENSE_KEYS` is optional: without it, the extension takes its committed
-  `license-key.pem`.
+- `KISTA_LICENSE_KEYS` is optional: without it (or empty), the extension takes its committed
+  `license-key.pem`. `kista.Makefile` always passes it, so a build directory configured with keys
+  before does not keep them.
 - The extension's `Makefile` includes `makefiles/kista.Makefile` after `duckdb_extension.Makefile`.
 - Its CMake passes `${KISTA_LICENSE_KEYS}` to `kista_sdk_license_keys`.
 - Enterest sets the keys to the extension's registered ones, then reads them back from the binary.
@@ -65,9 +66,11 @@ jobs:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
     permissions: {id-token: write, contents: read}
-    uses: hugr-lab/extension-ci-tools/.github/workflows/_kista_publish.yml@main
+    uses: hugr-lab/extension-ci-tools/.github/workflows/_kista_publish.yml@<commit>
     with:
       extension_name: myext
+      ci_tools_version: <the same commit>        # the script the job runs
+      # environment: release                     # when the publisher's binding names an environment
       kista_url: ${{ vars.KISTA_URL }}
       tenant: ${{ vars.KISTA_TENANT }}
       channel: ${{ vars.KISTA_CHANNEL }}
@@ -92,12 +95,21 @@ The token's `workflow_ref` names the calling workflow, not this reusable one. Fo
 extension whose keys kista should record, a server administrator also marks the publisher
 (`kista admin publisher license-keys <tenant> <publisher> on`, kista spec 0021).
 
-**Pinning.** Pin `@main` to a commit, as for any third-party workflow.
+**Pinning.** Pin the workflow to a commit, as for any third-party workflow, and give the same commit
+as `ci_tools_version`: it is the publication script the job checks out.
+
+**Environments.** A job that calls a reusable workflow cannot set `environment`. When the
+publisher's GitHub binding names one (`-environment release`), pass it as the `environment` input.
+
+**What is published.** Only `<extension_name>.duckdb_extension` files, of the artifacts named as the
+distribution names them (`<name>-<duckdb version>-extension-<arch><artifact_postfix>`). The kista URL
+must be https, and redirects are refused, so a token never goes to another host.
 
 **Outside GitHub Actions**, the script runs on built files with an API key:
 
 ```text
-KISTA_API_KEY=… python3 scripts/kista_publish.py --url https://kista.example.org --tenant acme --channel prod build/release/extension/myext/
+KISTA_API_KEY=… python3 extension-ci-tools/scripts/kista_publish.py --url https://kista.example.org \
+  --tenant acme --channel prod build/release/extension/myext/myext.duckdb_extension
 ```
 
 ## Upstream

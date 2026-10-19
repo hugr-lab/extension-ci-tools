@@ -7,14 +7,15 @@
 #     needs: build
 #     if: startsWith(github.ref, 'refs/tags/v')
 #     permissions: {id-token: write, contents: read}
-#     uses: hugr-lab/extension-ci-tools/.github/workflows/_kista_publish.yml@main
-#     with: {extension_name: myext, kista_url: '${{ vars.KISTA_URL }}', tenant: '${{ vars.KISTA_TENANT }}',
-#            channel: '${{ vars.KISTA_CHANNEL }}'}
+#     uses: hugr-lab/extension-ci-tools/.github/workflows/_kista_publish.yml@<commit>
+#     with: {extension_name: myext, ci_tools_version: <the same commit>, kista_url: '${{ vars.KISTA_URL }}',
+#            tenant: '${{ vars.KISTA_TENANT }}', channel: '${{ vars.KISTA_CHANNEL }}'}
 #     secrets: {KISTA_API_KEY: '${{ secrets.KISTA_API_KEY }}'}   # optional: OIDC without it
 #
 # Each built file goes to kista as it is; kista checks it and signs it with the channel's key. wasm
 # builds are skipped while kista does not take them. With OIDC, the token's workflow_ref names the
-# calling workflow, which is what the publisher's GitHub binding in kista names.
+# calling workflow, which is what the publisher's GitHub binding in kista names; a binding with an
+# environment needs the same `environment` here (a job that calls a workflow cannot set one).
 name: Publish to kista
 on:
   workflow_call:
@@ -43,10 +44,14 @@ on:
         type: string
         default: ""
       ci_tools_version:
-        description: the ref of hugr-lab/extension-ci-tools to take the publication script from
+        description: the ref of hugr-lab/extension-ci-tools to take the publication script from; the same commit as this workflow's
+        required: true
+        type: string
+      environment:
+        description: the GitHub environment the publish job runs in, when the publisher's binding names one
         required: false
         type: string
-        default: main
+        default: ""
     secrets:
       KISTA_API_KEY:
         description: a publisher's API key; without it, GitHub's OIDC token (the caller grants id-token write)
@@ -60,6 +65,11 @@ jobs:
     name: kista ${{ inputs.tenant }}/${{ inputs.channel }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    environment: ${{ inputs.environment }}
+    # a called workflow's permissions are at most the caller's: the caller grants id-token: write
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -76,7 +86,13 @@ jobs:
       - name: Publish
         env:
           KISTA_API_KEY: ${{ secrets.KISTA_API_KEY }}
+          KISTA_URL: ${{ inputs.kista_url }}
+          KISTA_TENANT: ${{ inputs.tenant }}
+          KISTA_CHANNEL: ${{ inputs.channel }}
+          KISTA_VISIBILITY: ${{ inputs.visibility }}
+          EXTENSION_NAME: ${{ inputs.extension_name }}
+          ARTIFACT_POSTFIX: ${{ inputs.artifact_postfix }}
         run: |
-          python3 extension-ci-tools/scripts/kista_publish.py --url '${{ inputs.kista_url }}' \
-            --tenant '${{ inputs.tenant }}' --channel '${{ inputs.channel }}' --visibility '${{ inputs.visibility }}' \
-            --summary "$GITHUB_STEP_SUMMARY" artifacts
+          python3 extension-ci-tools/scripts/kista_publish.py --url "$KISTA_URL" --tenant "$KISTA_TENANT" \
+            --channel "$KISTA_CHANNEL" --visibility "$KISTA_VISIBILITY" --name "$EXTENSION_NAME" \
+            --postfix="$ARTIFACT_POSTFIX" --summary "$GITHUB_STEP_SUMMARY" artifacts

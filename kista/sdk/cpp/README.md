@@ -98,18 +98,20 @@ kista_sdk_license_keys(myext_extension          ${CMAKE_CURRENT_SOURCE_DIR}/lice
 `KISTA_LICENSE_KEYS` when it is set (`makefiles/kista.Makefile`; Enterest's builders set it):
 
 ```cmake
-set(KISTA_LICENSE_KEYS "${CMAKE_CURRENT_SOURCE_DIR}/license-key.pem" CACHE STRING "licence keys (PEM, ;-separated)")
+if(NOT KISTA_LICENSE_KEYS)   # unset or empty: the committed key
+  set(KISTA_LICENSE_KEYS ${CMAKE_CURRENT_SOURCE_DIR}/license-key.pem)
+endif()
 kista_sdk_license_keys(myext_loadable_extension ${KISTA_LICENSE_KEYS})
 kista_sdk_license_keys(myext_extension          ${KISTA_LICENSE_KEYS})
 ```
- The library uses DuckDB's
-bundled mbedtls (`duckdb_mbedtls`) for SHA-256 and the signature, and DuckDB itself; nothing else.
+
+The library uses DuckDB's bundled mbedtls (`duckdb_mbedtls`) for SHA-256 and the signature, and DuckDB itself; nothing else.
 `test/extension` is a complete example: `kista_demo`, which the e2e cases run.
 
 ## Trust
 
 The SDK holds no keys: each build names the keys its licences are signed with (spec 0021,
-`specs/0021-licence-keys/spec.md`), and trusts those alone, never a run-time setting.
+in kista's repository), and trusts those alone, never a run-time setting.
 
 - **`kista_sdk_license_keys(<target> <pem>…)`** takes one to four public keys, each a file as
   `openssl pkey -pubout` writes it: one `PUBLIC KEY` PEM block, 64-column base64. Take them from the
