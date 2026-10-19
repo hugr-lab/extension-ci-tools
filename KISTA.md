@@ -17,7 +17,8 @@ CI. The design is kista's spec 0022 (`specs/0022-developer-kit/spec.md`).
   - It is not built by the community.
   - Enterest builds it from git with the same Makefile.
 
-hugr-lab's extension template (kista spec 0022, phase 2) will set up either kind.
+[hugr-lab/extension-template](https://github.com/hugr-lab/extension-template) sets up either kind
+(`./bootstrap.sh <name> [--licensed]`).
 
 ## What the fork adds
 
@@ -58,10 +59,14 @@ make test
 
 ```yaml
 jobs:
-  build:
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@main   # an open extension
-    # uses: hugr-lab/extension-ci-tools/.github/workflows/_extension_distribution.yml@main   (a licensed one)
-    with: {extension_name: myext, duckdb_version: v2.0-cyanoptera, ci_tools_version: main}
+  build:   # an open extension: DuckDB's own build
+    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@<commit>
+    with: {extension_name: myext, ci_tools_version: <the same commit>}
+  # build:   a licensed extension: this fork's build, which must also check this fork out as
+  #          extension-ci-tools (the workflow's default is DuckDB's, which has no SDK)
+  #   uses: hugr-lab/extension-ci-tools/.github/workflows/_extension_distribution.yml@<commit>
+  #   with: {extension_name: myext, ci_tools_version: <the same commit>,
+  #          override_ci_tools_repository: hugr-lab/extension-ci-tools}
   kista:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
