@@ -61,9 +61,9 @@ public:
 	size_t Size() const {
 		return by_kid.size();
 	}
-	// Trusted are the keys this build of the SDK trusts: compiled in, never added at run time
-	// (src/keys.cpp; the test key only in the kista_sdk_testkey library). An extension verifies
-	// with these; other Keys are for tests.
+	// Trusted are the keys this build trusts: the target's key block (kista_sdk_license_keys, spec
+	// 0021), never added at run time; a key in it that is not RSA-2048 with e = 65537 is skipped. An
+	// extension verifies with these; other Keys are for tests.
 	static const Keys &Trusted();
 
 private:
@@ -73,9 +73,13 @@ private:
 // Fingerprint returns a PEM public key's fingerprint, or "" when it is not one.
 std::string Fingerprint(const std::string &pem);
 
-// TrustsTestKey reports whether this build trusts the vectors' test-only key (kista_sdk_testkey):
-// an extension's release build can assert that it does not.
+// TrustsTestKey reports whether this build trusts the vectors' test-only key (kista_sdk_testkey, or
+// its PEM given to kista_sdk_license_keys): an extension's release build can assert that it does not.
 bool TrustsTestKey();
+
+// KeyBlockProblem says what is wrong with this build's licence key block (a key that is skipped, a
+// key named twice, a block that does not parse), or "": Register logs it as a warning.
+std::string KeyBlockProblem();
 
 // Result is a verification: the status, the rule broken (spec 0012's stable codes, as
 // internal/license names them) and a message for an invalid licence, the claims otherwise.

@@ -1,5 +1,5 @@
-// kista_sdk, the library an extension links, trusts no test key: a licence signed with the vectors'
-// test-only key is kid_untrusted there.
+// A target with keys of its own (kista_sdk_license_keys with the vectors' untrusted key) trusts
+// exactly them, and not the vectors' test-only key.
 #include "kista/license.hpp"
 
 #include <iostream>
@@ -18,7 +18,7 @@ static const char *const E3Key =
 
 int main() {
 	if (kista::TrustsTestKey()) {
-		std::cerr << "kista_sdk trusts the test key\n";
+		std::cerr << "the target trusts the test key\n";
 		return 1;
 	}
 	// the vectors' first case, signed with the test key
@@ -30,6 +30,11 @@ int main() {
 		std::cerr << "not refused\n";
 		return 1;
 	}
-	std::cout << "kista_sdk trusts " << kista::Keys::Trusted().Size() << " keys, no test key\n";
+	auto &trusted = kista::Keys::Trusted();
+	if (trusted.Size() != 1 || !trusted.Find("sha256:ad8cb69e7df5760a64d17cfb1183a79c28deca1b8203bf5c5d3ef512233e59cd")) {
+		std::cerr << "the target's key block holds " << trusted.Size() << " keys, not the untrusted key alone\n";
+		return 1;
+	}
+	std::cout << "the target trusts its own key, and no test key\n";
 	return 0;
 }

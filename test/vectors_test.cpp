@@ -156,12 +156,17 @@ int main(int argc, char **argv) {
 			return 2;
 		}
 	}
-	// this test links kista_sdk_testkey: its compiled-in keys hold the vectors' key
+	// this test links kista_sdk_testkey: its key block holds the vectors' key, and no other
 	for (auto &k : doc.Get("keys")->arr) {
 		if (!kista::TrustsTestKey() || !kista::Keys::Trusted().Find(kista::Fingerprint(k.s))) {
 			std::cerr << "kista_sdk_testkey does not trust the vectors' key\n";
 			return 1;
 		}
+	}
+	if (kista::Keys::Trusted().Size() != doc.Get("keys")->arr.size() || !kista::KeyBlockProblem().empty()) {
+		std::cerr << "kista_sdk_testkey trusts " << kista::Keys::Trusted().Size() << " keys: " << kista::KeyBlockProblem()
+		          << "\n";
+		return 1;
 	}
 	int failed = 0, n = 0;
 	for (auto &c : doc.Get("cases")->arr) {

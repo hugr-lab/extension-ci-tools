@@ -710,6 +710,10 @@ void License::Register(duckdb::ExtensionLoader &loader, const std::string &name)
 	if (TrustsTestKey()) {
 		duckdb::KistaWarn(db, name + " is built with the kista SDK's test key: anyone can sign a licence it accepts");
 	}
+	auto problem = KeyBlockProblem();
+	if (!problem.empty()) {
+		duckdb::KistaWarn(db, name + " is built with a bad licence key: " + problem);
+	}
 	auto state = std::make_shared<State>();
 	state->name = name;
 	{

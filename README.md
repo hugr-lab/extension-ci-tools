@@ -87,30 +87,49 @@ From an extension built with DuckDB's CMake (the extension template, or DuckDB's
 add_subdirectory(path/to/sdk/cpp kista_sdk)
 target_link_libraries(myext_loadable_extension kista_sdk)
 target_link_libraries(myext_extension kista_sdk)
+kista_sdk_license_keys(myext_loadable_extension ${CMAKE_CURRENT_SOURCE_DIR}/license-key.pem)
+kista_sdk_license_keys(myext_extension          ${CMAKE_CURRENT_SOURCE_DIR}/license-key.pem)
 ```
 
-The library uses DuckDB's bundled mbedtls (`duckdb_mbedtls`) for SHA-256 and the signature, and
-DuckDB itself; nothing else. `test/extension` is a complete example: `kista_demo`, which the e2e
-cases run.
+`kista_sdk_license_keys` names the target's licence keys (below). The library uses DuckDB's
+bundled mbedtls (`duckdb_mbedtls`) for SHA-256 and the signature, and DuckDB itself; nothing else.
+`test/extension` is a complete example: `kista_demo`, which the e2e cases run.
 
 ## Trust
 
-The keys a licence must be signed with are compiled in (`src/keys.cpp`): the issuer's, never a
-run-time setting.
+The SDK holds no keys: each build names the keys its licences are signed with (spec 0021,
+`specs/0021-licence-keys/spec.md`), and trusts those alone, never a run-time setting.
 
-- **Issuer keys.** Enterest's keys are added there when they are published. Until then a build
-  trusts none, and every licence is `invalid` (`kid_untrusted`).
-- **Test key.** The `kista_sdk_testkey` library also trusts the licence vectors' test-only key
-  (`internal/license/testdata/test-only-2048.pem`, whose private half is in this repository).
-  - A test extension links `kista_sdk_testkey` instead of `kista_sdk`, as `kista_demo` does.
+- **`kista_sdk_license_keys(<target> <pem>…)`** takes one to four public keys, each a file as
+  `openssl pkey -pubout` writes it: one `PUBLIC KEY` PEM block, 64-column base64. Take them from the
+  issuer that signs the extension's licences. It writes them into the target as the **key block**,
+  which the SDK reads at run time and kista reads from the binary (`kista ext inspect` prints them).
+  - Call it once for each target that links `kista_sdk`. A target that links `kista_sdk` without
+    it does not link, with an error naming `kista_sdk_license_keys`. The one exception is a macOS
+    build with `-undefined dynamic_lookup` (DuckDB's non-static extension builds), which links and
+    then fails to load, with the same name.
+  - The block and the SDK are hidden in the module: an extension trusts its own block, never
+    another loaded extension's.
+  - Configuring checks the files' form (CRLF line ends are normalised) and refuses a key given
+    twice. The SDK and kista check the keys themselves: RSA-2048, `e = 65537`. A key that fails is
+    skipped by the SDK, and makes kista read the block as malformed (`kista ext inspect` says so).
+  - Several extensions in one tree each name their own keys. Two licensed extensions cannot be
+    linked statically into one DuckDB: the link fails on the duplicate symbol.
+  - Changing a key means a new build, so a new version: the licences of the old key stay with the
+    old version's binaries.
+- **Test key.** The `kista_sdk_testkey` library is the key block of the licence vectors' test-only
+  key (`test/keys/test-only-2048.pub.pem`; its private half is
+  `internal/license/testdata/test-only-2048.pem`, in this repository).
+  - A test extension links `kista_sdk_testkey` instead of calling `kista_sdk_license_keys`, as
+    `kista_demo` does.
   - `go run ./internal/license/vectorgen sign -claims <file>` signs licences for it.
-  - No option puts the test key into `kista_sdk`. `kista::TrustsTestKey()` lets a release build
-    assert that, and `Register` logs a warning when the test key is trusted.
+  - `kista::TrustsTestKey()` lets a release build assert that it does not trust the test key, and
+    `Register` logs a warning when it does.
 
 ## Tests
 
 ```bash
 make e2e-duckdb   # DuckDB at e2e/DUCKDB_PIN, kista_demo with it; fills e2e/.build/sdk
-make sdk-test     # every licence vector through the C++ verifier; kista_sdk trusts no test key
+make sdk-test     # every licence vector through the C++ verifier; key blocks and their checks
 make e2e          # kista_demo against kista serve (e2e/sdk_test.go), with the rest of the e2e
 ```
