@@ -89,32 +89,51 @@ jobs:
 - It skips wasm builds while kista does not take them, and says so in the job summary.
 
 **The publisher key** (kista spec 0023). Each request is signed with the publisher's SSH key, like
-an SSH key on GitHub: kista holds only the public half.
+an SSH key on GitHub: kista holds only the public half. Once, for a repository:
 
 ```text
-ssh-keygen -t ed25519 -N '' -C myext-ci -f publisher_key        # the developer, once
-kista admin publisher key add <tenant> <publisher> publisher_key.pub -expires 365d   # kista's administrator
-gh secret set KISTA_PUBLISHER_KEY --env release < publisher_key  # then delete the private file
+# the developer: a key for CI, without a passphrase
+ssh-keygen -t ed25519 -N '' -C myext-ci -f publisher_key
+
+# kista's administrator: the publisher, what it may publish, and its key
+kista admin publisher add <tenant> <publisher>
+kista admin grant add <tenant> -principal publisher:<publisher> -verb publish -channel <channel> -extension myext
+kista admin publisher key add <tenant> <publisher> publisher_key.pub -expires 365d
+
+# the developer: check it, then keep the private half as an environment's secret and delete the file
+KISTA_PUBLISHER_KEY=publisher_key python3 scripts/kista_publish.py --url <kista URL> --tenant <tenant> --channel <channel> --check
+gh api -X PUT repos/<owner>/<repo>/environments/release      # add protection rules in Settings
+gh secret set KISTA_PUBLISHER_KEY --env release < publisher_key
+gh variable set KISTA_URL --body <kista URL>; gh variable set KISTA_TENANT --body <tenant>; gh variable set KISTA_CHANNEL --body <channel>
+rm publisher_key
 ```
 
-For a licensed extension whose keys kista should record, a server administrator also marks the
-publisher (`kista admin publisher license-keys <tenant> <publisher> on`, kista spec 0021), and then
-registers its keys.
+`--check` signs a `whoami`: it fails on a key kista does not know, and, with `--channel`, on a
+publisher without a `publish` grant there. To replace the key, register the new one, replace the
+secret, and remove the old one in kista (`kista admin publisher key list|remove`).
+
+For a licensed extension whose keys kista should record, a server administrator marks the publisher
+(`kista admin publisher license-keys <tenant> <publisher> on`, kista spec 0021) before registering
+its key.
 
 **Pinning.** Pin the workflow to a commit, as for any third-party workflow, and give the same commit
-as `ci_tools_version`: it is the publication script the job checks out.
+as `ci_tools_version`: it is the publication script the job checks out and hands the key to, so
+never a branch or a tag that can move.
 
 **Environments.** A job that calls a reusable workflow cannot set `environment`: pass it as the
 `environment` input. Keep `KISTA_PUBLISHER_KEY` an environment secret, so the environment's
-protection rules (required reviewers, which tags) gate who can publish.
+protection rules (required reviewers, which tags) gate who can publish. Without an environment the
+job warns: any workflow of the repository that can read the secret can publish.
 
 **What is published.** Only `<extension_name>.duckdb_extension` files, of the artifacts named as the
 distribution names them (`<name>-<duckdb version>-extension-<arch><artifact_postfix>`). The kista URL
 must be https, and redirects are refused.
 
-**Any other CI** runs the script on built files: it needs only Python 3 and OpenSSH 8.1 or later. The
-key is in the environment variable `KISTA_PUBLISHER_KEY` (`--key-env` names another): the key
-itself, its base64 (for a CI whose masked variables hold no newlines), or a file holding it.
+**Any other CI** runs the script on built files: it needs only Python 3 and OpenSSH 8.1 or later, on
+the CI host (DuckDB's build containers may have an older OpenSSH). The key is in the environment
+variable `KISTA_PUBLISHER_KEY` (`--key-env` names another): the key itself, its base64 (GitLab's
+masked variables hold no newlines), or a file holding it (a GitLab File variable is one). The script
+copies it to a private file of its own, in `RUNNER_TEMP` when set, and removes it at the end.
 
 ```text
 python3 extension-ci-tools/scripts/kista_publish.py --url https://kista.example.org --tenant acme --check

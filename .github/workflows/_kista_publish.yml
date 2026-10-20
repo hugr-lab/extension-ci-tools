@@ -6,7 +6,7 @@
 #     if: startsWith(github.ref, 'refs/tags/v')
 #     uses: hugr-lab/extension-ci-tools/.github/workflows/_kista_publish.yml@<commit>
 #     with: {extension_name: myext, ci_tools_version: <the same commit>, kista_url: '${{ vars.KISTA_URL }}',
-#            tenant: '${{ vars.KISTA_TENANT }}', channel: '${{ vars.KISTA_CHANNEL }}'}
+#            tenant: '${{ vars.KISTA_TENANT }}', channel: '${{ vars.KISTA_CHANNEL }}', environment: release}
 #     secrets: {KISTA_PUBLISHER_KEY: '${{ secrets.KISTA_PUBLISHER_KEY }}'}
 #
 # Each request is signed with the publisher's SSH key, whose public half is registered on the
@@ -84,7 +84,14 @@ jobs:
           KISTA_PUBLISHER_KEY: ${{ secrets.KISTA_PUBLISHER_KEY }}
           KISTA_URL: ${{ inputs.kista_url }}
           KISTA_TENANT: ${{ inputs.tenant }}
-        run: python3 extension-ci-tools/scripts/kista_publish.py --url "$KISTA_URL" --tenant "$KISTA_TENANT" --check
+          KISTA_CHANNEL: ${{ inputs.channel }}
+          KISTA_ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          if [ -z "$KISTA_ENVIRONMENT" ]; then
+            echo "::warning::no environment: any workflow of this repository that can read the KISTA_PUBLISHER_KEY secret can publish; keep it an environment's secret behind protection rules"
+          fi
+          python3 extension-ci-tools/scripts/kista_publish.py --url "$KISTA_URL" --tenant "$KISTA_TENANT" \
+            --channel "$KISTA_CHANNEL" --check >/dev/null
 
       - name: Publish
         env:
