@@ -92,8 +92,8 @@ jobs:
 an SSH key on GitHub: kista holds only the public half. Once, for a repository:
 
 ```text
-# the developer: a key for CI, without a passphrase
-ssh-keygen -t ed25519 -N '' -C myext-ci -f publisher_key
+# the developer: a key for CI, without a passphrase, outside the repository
+cd "$(mktemp -d)" && ssh-keygen -t ed25519 -N '' -C myext-ci -f publisher_key
 
 # kista's administrator: the publisher, what it may publish, and its key
 kista admin publisher add <tenant> <publisher>
@@ -101,8 +101,11 @@ kista admin grant add <tenant> -principal publisher:<publisher> -verb publish -c
 kista admin publisher key add <tenant> <publisher> publisher_key.pub -expires 365d
 
 # the developer: check it, then keep the private half as an environment's secret and delete the file
-KISTA_PUBLISHER_KEY=publisher_key python3 scripts/kista_publish.py --url <kista URL> --tenant <tenant> --channel <channel> --check
-gh api -X PUT repos/<owner>/<repo>/environments/release      # add protection rules in Settings
+KISTA_PUBLISHER_KEY=publisher_key python3 <this repository>/scripts/kista_publish.py --url <kista URL> --tenant <tenant> --channel <channel> --check
+# an environment only v* tags may deploy to: a workflow pushed on a branch cannot read its secret
+gh api -X PUT repos/<owner>/<repo>/environments/release --input - \
+  <<< '{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}'
+gh api -X POST repos/<owner>/<repo>/environments/release/deployment-branch-policies -f name='v*' -f type=tag
 gh secret set KISTA_PUBLISHER_KEY --env release < publisher_key
 gh variable set KISTA_URL --body <kista URL>; gh variable set KISTA_TENANT --body <tenant>; gh variable set KISTA_CHANNEL --body <channel>
 rm publisher_key
@@ -122,8 +125,9 @@ never a branch or a tag that can move.
 
 **Environments.** A job that calls a reusable workflow cannot set `environment`: pass it as the
 `environment` input. Keep `KISTA_PUBLISHER_KEY` an environment secret, so the environment's
-protection rules (required reviewers, which tags) gate who can publish. Without an environment the
-job warns: any workflow of the repository that can read the secret can publish.
+protection rules (only `v*` tags, required reviewers) gate who can publish, and protect `v*` tags
+with a ruleset. Without an environment, or with one that allows any branch, any workflow of the
+repository can read the key; the job warns when there is none.
 
 **What is published.** Only `<extension_name>.duckdb_extension` files, of the artifacts named as the
 distribution names them (`<name>-<duckdb version>-extension-<arch><artifact_postfix>`). The kista URL
