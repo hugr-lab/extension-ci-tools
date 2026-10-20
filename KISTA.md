@@ -31,7 +31,7 @@ CI. The design is kista's spec 0022 (`specs/0022-developer-kit/spec.md`).
 | `kista/scripts/sdk-test.sh` | Builds DuckDB at the pin with the SDK's test extension, then runs the SDK's tests. |
 | `kista/scripts/kista-vectors.sh` | Copies or checks the vectors against a kista checkout. |
 | `makefiles/kista.Makefile` | Passes `KISTA_LICENSE_KEYS` to the extension's CMake. |
-| `scripts/kista_publish.py` | Publishes built extensions to a kista channel (standard-library Python). |
+| `scripts/kista_publish.py` | Publishes built extensions to a kista channel, each request signed with the publisher's SSH key (standard-library Python and OpenSSH). |
 | `.github/workflows/_kista_publish.yml` | The reusable publication job. |
 | `.github/workflows/kista.yml` | This fork's own CI for the above. |
 
@@ -70,52 +70,78 @@ jobs:
   kista:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
-    permissions: {id-token: write, contents: read}
     uses: hugr-lab/extension-ci-tools/.github/workflows/_kista_publish.yml@<commit>
     with:
       extension_name: myext
       ci_tools_version: <the same commit>        # the script the job runs
-      # environment: release                     # when the publisher's binding names an environment
+      environment: release                       # whose secret holds the key, behind its rules
       kista_url: ${{ vars.KISTA_URL }}
       tenant: ${{ vars.KISTA_TENANT }}
       channel: ${{ vars.KISTA_CHANNEL }}
     secrets:
-      KISTA_API_KEY: ${{ secrets.KISTA_API_KEY }}   # optional: without it, GitHub's OIDC token
+      KISTA_PUBLISHER_KEY: ${{ secrets.KISTA_PUBLISHER_KEY }}
 ```
 
 **What the job does.**
+- It checks the key first (a signed `whoami`), so a key kista does not know fails before any upload.
 - It uploads each platform's build as it is. kista checks it and signs it with the channel's key,
   so no signing key is needed in CI.
 - It skips wasm builds while kista does not take them, and says so in the job summary.
 
-**Authentication.** Without `KISTA_API_KEY`, the job uses GitHub's OIDC token for the audience
-`<kista_url>/<tenant>`. Bind the calling workflow to a publisher in kista:
+**The publisher key** (kista spec 0023). Each request is signed with the publisher's SSH key, like
+an SSH key on GitHub: kista holds only the public half. Once, for a repository:
 
 ```text
-kista admin publisher github add <tenant> <publisher> -owner-id <id> -repository-id <id> \
-  -workflow <owner>/<repo>/.github/workflows/<file> -ref 'refs/tags/v*'
+# the developer: a key for CI, without a passphrase
+ssh-keygen -t ed25519 -N '' -C myext-ci -f publisher_key
+
+# kista's administrator: the publisher, what it may publish, and its key
+kista admin publisher add <tenant> <publisher>
+kista admin grant add <tenant> -principal publisher:<publisher> -verb publish -channel <channel> -extension myext
+kista admin publisher key add <tenant> <publisher> publisher_key.pub -expires 365d
+
+# the developer: check it, then keep the private half as an environment's secret and delete the file
+KISTA_PUBLISHER_KEY=publisher_key python3 scripts/kista_publish.py --url <kista URL> --tenant <tenant> --channel <channel> --check
+gh api -X PUT repos/<owner>/<repo>/environments/release      # add protection rules in Settings
+gh secret set KISTA_PUBLISHER_KEY --env release < publisher_key
+gh variable set KISTA_URL --body <kista URL>; gh variable set KISTA_TENANT --body <tenant>; gh variable set KISTA_CHANNEL --body <channel>
+rm publisher_key
 ```
 
-The token's `workflow_ref` names the calling workflow, not this reusable one. For a licensed
-extension whose keys kista should record, a server administrator also marks the publisher
-(`kista admin publisher license-keys <tenant> <publisher> on`, kista spec 0021).
+`--check` signs a `whoami`: it fails on a key kista does not know, and, with `--channel`, on a
+publisher without a `publish` grant there. To replace the key, register the new one, replace the
+secret, and remove the old one in kista (`kista admin publisher key list|remove`).
+
+For a licensed extension whose keys kista should record, a server administrator marks the publisher
+(`kista admin publisher license-keys <tenant> <publisher> on`, kista spec 0021) before registering
+its key.
 
 **Pinning.** Pin the workflow to a commit, as for any third-party workflow, and give the same commit
-as `ci_tools_version`: it is the publication script the job checks out.
+as `ci_tools_version`: it is the publication script the job checks out and hands the key to, so
+never a branch or a tag that can move.
 
-**Environments.** A job that calls a reusable workflow cannot set `environment`. When the
-publisher's GitHub binding names one (`-environment release`), pass it as the `environment` input.
+**Environments.** A job that calls a reusable workflow cannot set `environment`: pass it as the
+`environment` input. Keep `KISTA_PUBLISHER_KEY` an environment secret, so the environment's
+protection rules (required reviewers, which tags) gate who can publish. Without an environment the
+job warns: any workflow of the repository that can read the secret can publish.
 
 **What is published.** Only `<extension_name>.duckdb_extension` files, of the artifacts named as the
 distribution names them (`<name>-<duckdb version>-extension-<arch><artifact_postfix>`). The kista URL
-must be https, and redirects are refused, so a token never goes to another host.
+must be https, and redirects are refused.
 
-**Outside GitHub Actions**, the script runs on built files with an API key:
+**Any other CI** runs the script on built files: it needs only Python 3 and OpenSSH 8.1 or later, on
+the CI host (DuckDB's build containers may have an older OpenSSH). The key is in the environment
+variable `KISTA_PUBLISHER_KEY` (`--key-env` names another): the key itself, its base64 (GitLab's
+masked variables hold no newlines), or a file holding it (a GitLab File variable is one). The script
+copies it to a private file of its own, in `RUNNER_TEMP` when set, and removes it at the end.
 
 ```text
-KISTA_API_KEY=… python3 extension-ci-tools/scripts/kista_publish.py --url https://kista.example.org \
+python3 extension-ci-tools/scripts/kista_publish.py --url https://kista.example.org --tenant acme --check
+python3 extension-ci-tools/scripts/kista_publish.py --url https://kista.example.org \
   --tenant acme --channel prod build/release/extension/myext/myext.duckdb_extension
 ```
+
+`--dry-run` prints the statements it would sign and the key's fingerprint, and sends nothing.
 
 ## Upstream
 

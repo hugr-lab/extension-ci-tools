@@ -1,21 +1,19 @@
-# Publishes a distribution build's artifacts to a kista channel (hugr-lab's fork; kista spec 0022).
-#
-# Call it after _extension_distribution.yml (DuckDB's or this fork's), in a job that may request an
-# OIDC token:
+# Publishes a distribution build's artifacts to a kista channel (hugr-lab's fork; kista specs 0022
+# and 0023). Call it after _extension_distribution.yml (DuckDB's or this fork's):
 #
 #   kista:
 #     needs: build
 #     if: startsWith(github.ref, 'refs/tags/v')
-#     permissions: {id-token: write, contents: read}
 #     uses: hugr-lab/extension-ci-tools/.github/workflows/_kista_publish.yml@<commit>
 #     with: {extension_name: myext, ci_tools_version: <the same commit>, kista_url: '${{ vars.KISTA_URL }}',
-#            tenant: '${{ vars.KISTA_TENANT }}', channel: '${{ vars.KISTA_CHANNEL }}'}
-#     secrets: {KISTA_API_KEY: '${{ secrets.KISTA_API_KEY }}'}   # optional: OIDC without it
+#            tenant: '${{ vars.KISTA_TENANT }}', channel: '${{ vars.KISTA_CHANNEL }}', environment: release}
+#     secrets: {KISTA_PUBLISHER_KEY: '${{ secrets.KISTA_PUBLISHER_KEY }}'}
 #
-# Each built file goes to kista as it is; kista checks it and signs it with the channel's key. wasm
-# builds are skipped while kista does not take them. With OIDC, the token's workflow_ref names the
-# calling workflow, which is what the publisher's GitHub binding in kista names; a binding with an
-# environment needs the same `environment` here (a job that calls a workflow cannot set one).
+# Each request is signed with the publisher's SSH key, whose public half is registered on the
+# publisher in kista (kista admin publisher key add). Each built file goes to kista as it is; kista
+# checks it and signs it with the channel's key. wasm builds are skipped while kista does not take
+# them. Keep the key an environment secret behind the environment's protection rules (reviewers,
+# which tags), and name the environment here: a job that calls a workflow cannot set one.
 name: Publish to kista
 on:
   workflow_call:
@@ -48,14 +46,14 @@ on:
         required: true
         type: string
       environment:
-        description: the GitHub environment the publish job runs in, when the publisher's binding names one
+        description: the GitHub environment the publish job runs in, whose secret holds the key and whose rules gate it
         required: false
         type: string
         default: ""
     secrets:
-      KISTA_API_KEY:
-        description: a publisher's API key; without it, GitHub's OIDC token (the caller grants id-token write)
-        required: false
+      KISTA_PUBLISHER_KEY:
+        description: the publisher's private SSH key (ssh-ed25519 or ecdsa-sha2-nistp256), or its base64
+        required: true
 
 permissions:
   contents: read
@@ -66,10 +64,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: ${{ inputs.environment }}
-    # a called workflow's permissions are at most the caller's: the caller grants id-token: write
     permissions:
       contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -83,9 +79,23 @@ jobs:
           pattern: ${{ inputs.extension_name }}-*-extension-*${{ inputs.artifact_postfix }}
           path: artifacts
 
+      - name: Check the key
+        env:
+          KISTA_PUBLISHER_KEY: ${{ secrets.KISTA_PUBLISHER_KEY }}
+          KISTA_URL: ${{ inputs.kista_url }}
+          KISTA_TENANT: ${{ inputs.tenant }}
+          KISTA_CHANNEL: ${{ inputs.channel }}
+          KISTA_ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          if [ -z "$KISTA_ENVIRONMENT" ]; then
+            echo "::warning::no environment: any workflow of this repository that can read the KISTA_PUBLISHER_KEY secret can publish; keep it an environment's secret behind protection rules"
+          fi
+          python3 extension-ci-tools/scripts/kista_publish.py --url "$KISTA_URL" --tenant "$KISTA_TENANT" \
+            --channel "$KISTA_CHANNEL" --check >/dev/null
+
       - name: Publish
         env:
-          KISTA_API_KEY: ${{ secrets.KISTA_API_KEY }}
+          KISTA_PUBLISHER_KEY: ${{ secrets.KISTA_PUBLISHER_KEY }}
           KISTA_URL: ${{ inputs.kista_url }}
           KISTA_TENANT: ${{ inputs.tenant }}
           KISTA_CHANNEL: ${{ inputs.channel }}
