@@ -21,6 +21,17 @@ import urllib.parse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import kista_publish  # noqa: E402
+import time  # noqa: E402
+
+
+class _Clock:
+    """The time module, with sleep recorded instead of slept."""
+
+    def __init__(self, sleep):
+        self.sleep = sleep
+
+    def __getattr__(self, name):
+        return getattr(time, name)
 
 
 def extension(path, platform="linux_amd64", version="1.2.0", magic="4", abi="CPP", duckdb="v2.0.0"):
@@ -104,11 +115,13 @@ class Test(unittest.TestCase):
         os.mkdir(self.runner_temp)
         os.environ["RUNNER_TEMP"] = self.runner_temp
         os.environ.pop("KISTA_PUBLISHER_KEY", None)
-        self._sleep = kista_publish.time.sleep
-        kista_publish.time.sleep = self.sleeps.append
+        # kista_publish's own clock only: the time module's sleep is shared (the test server's
+        # thread, Python's own) and a global patch records their sleeps too
+        self._time = kista_publish.time
+        kista_publish.time = _Clock(self.sleeps.append)
 
     def tearDown(self):
-        kista_publish.time.sleep = self._sleep
+        kista_publish.time = self._time
         os.environ.pop("RUNNER_TEMP", None)
         self.assertEqual(os.listdir(self.runner_temp), [], "a copy of the key left behind")
         shutil.rmtree(self.dir, ignore_errors=True)
