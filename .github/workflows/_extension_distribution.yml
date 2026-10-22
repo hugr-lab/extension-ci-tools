@@ -106,6 +106,17 @@ on:
         required: false
         type: string
         default: ""
+      # kista: false restores no cache (ccache, Go's modules): a build of untrusted code, which could
+      # write a cache another build reads, starts clean (Enterest's builders)
+      restore_cache:
+        required: false
+        type: boolean
+        default: true
+      # kista: a build job's longest run, in minutes (GitHub's default is 360)
+      timeout_minutes:
+        required: false
+        type: number
+        default: 360
       # Override the repo for the CI tools (for testing CI tools itself)
       override_ci_tools_repository:
         required: false
@@ -274,7 +285,7 @@ jobs:
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: extension-ci-tools/scripts/extbuild/go.mod
-          cache: true
+          cache: ${{ inputs.restore_cache }}
           cache-dependency-path: extension-ci-tools/scripts/extbuild/go.sum
 
       - name: Dump event path file
@@ -284,12 +295,16 @@ jobs:
 
       - id: compute-matrix
         name: Compute extension build matrix
+        # kista: the platform lists reach the shell as variables (a caller may pass a developer's)
+        env:
+          EXCLUDE_ARCHS: ${{ inputs.exclude_archs }}
+          OPT_IN_ARCHS: ${{ inputs.opt_in_archs }}
         run: |
           make -C extension-ci-tools/scripts/extbuild test build -sj4
           extension-ci-tools/scripts/extbuild/build/extbuild matrix \
             --input extension-ci-tools/config/distribution_matrix.json \
-            --exclude "${{ inputs.exclude_archs }}" \
-            --opt-in "${{ inputs.opt_in_archs }}" \
+            --exclude "$EXCLUDE_ARCHS" \
+            --opt-in "$OPT_IN_ARCHS" \
             --runners '${{ inputs.runners }}' \
             --reduced-ci-mode "${{ inputs.reduced_ci_mode }}" \
             --out "$GITHUB_OUTPUT"
@@ -300,6 +315,7 @@ jobs:
     name: ${{ matrix.duckdb_arch }}
     continue-on-error: ${{ contains(format(';{0};', inputs.allow_failure_archs), format(';{0};', matrix.duckdb_arch)) }}
     runs-on: ${{ startsWith(matrix.runner, '[') && fromJSON(matrix.runner) || matrix.runner }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
     needs: generate_matrix
     if: ${{ needs.generate_matrix.outputs.linux_matrix != '{}' && needs.generate_matrix.outputs.linux_matrix != '' }}
     strategy:
@@ -345,7 +361,7 @@ jobs:
           git fetch -q --tags origin '+refs/heads/*:refs/remotes/origin/*'
           # a commit no branch or tag reaches: asked for by itself
           git cat-file -e "$REPOSITORY_REF^{commit}" 2>/dev/null || git fetch -q origin "$REPOSITORY_REF"
-          git -c advice.detachedHead=false checkout -q "$REPOSITORY_REF"
+          git -c advice.detachedHead=false checkout -q --detach "$REPOSITORY_REF^{commit}"
           git submodule update -q --init --recursive
 
       - name: Checkout / Extension CI tools
@@ -381,6 +397,7 @@ jobs:
         run: python3 extension-ci-tools/scripts/ci_phase.py checkout
 
       - name: Setup / Ccache
+        if: ${{ inputs.restore_cache }}
         uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
         continue-on-error: true
         with:
@@ -416,6 +433,7 @@ jobs:
   macos:
     name: ${{ matrix.duckdb_arch }}
     runs-on: ${{ startsWith(matrix.runner, '[') && fromJSON(matrix.runner) || matrix.runner }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
     needs:
       - generate_matrix
       - linux
@@ -474,7 +492,7 @@ jobs:
           git fetch -q --tags origin '+refs/heads/*:refs/remotes/origin/*'
           # a commit no branch or tag reaches: asked for by itself
           git cat-file -e "$REPOSITORY_REF^{commit}" 2>/dev/null || git fetch -q origin "$REPOSITORY_REF"
-          git -c advice.detachedHead=false checkout -q "$REPOSITORY_REF"
+          git -c advice.detachedHead=false checkout -q --detach "$REPOSITORY_REF^{commit}"
           git submodule update -q --init --recursive
 
       - name: Checkout / Extension CI tools
@@ -506,8 +524,10 @@ jobs:
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: '1.23'
+          cache: ${{ inputs.restore_cache }}
 
       - name: Setup / Ccache
+        if: ${{ inputs.restore_cache }}
         uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
         continue-on-error: true
         with:
@@ -543,6 +563,7 @@ jobs:
   windows:
     name: ${{ matrix.duckdb_arch }}
     runs-on: ${{ startsWith(matrix.runner, '[') && fromJSON(matrix.runner) || matrix.runner }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
     needs:
       - generate_matrix
       - linux
@@ -606,7 +627,7 @@ jobs:
           git fetch -q --tags origin '+refs/heads/*:refs/remotes/origin/*'
           # a commit no branch or tag reaches: asked for by itself
           git cat-file -e "$REPOSITORY_REF^{commit}" 2>/dev/null || git fetch -q origin "$REPOSITORY_REF"
-          git -c advice.detachedHead=false checkout -q "$REPOSITORY_REF"
+          git -c advice.detachedHead=false checkout -q --detach "$REPOSITORY_REF^{commit}"
           git submodule update -q --init --recursive
 
       - name: Checkout / Extension CI tools
@@ -647,8 +668,10 @@ jobs:
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: '1.23'
+          cache: ${{ inputs.restore_cache }}
 
       - name: Setup / Ccache
+        if: ${{ inputs.restore_cache }}
         uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
         with:
           max-size: 5GB
@@ -706,6 +729,7 @@ jobs:
   wasm:
     name: ${{ matrix.duckdb_arch }}
     runs-on: ${{ startsWith(matrix.runner, '[') && fromJSON(matrix.runner) || matrix.runner }}
+    timeout-minutes: ${{ inputs.timeout_minutes }}
     needs:
       - generate_matrix
       - linux
@@ -761,7 +785,7 @@ jobs:
           git fetch -q --tags origin '+refs/heads/*:refs/remotes/origin/*'
           # a commit no branch or tag reaches: asked for by itself
           git cat-file -e "$REPOSITORY_REF^{commit}" 2>/dev/null || git fetch -q origin "$REPOSITORY_REF"
-          git -c advice.detachedHead=false checkout -q "$REPOSITORY_REF"
+          git -c advice.detachedHead=false checkout -q --detach "$REPOSITORY_REF^{commit}"
           git submodule update -q --init --recursive
 
       - name: Checkout / Extension CI tools
@@ -804,8 +828,10 @@ jobs:
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: '1.23'
+          cache: ${{ inputs.restore_cache }}
 
       - name: Setup / Ccache
+        if: ${{ inputs.restore_cache }}
         uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
         continue-on-error: true
         with:

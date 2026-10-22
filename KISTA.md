@@ -34,7 +34,7 @@ CI. The design is kista's spec 0022 (`specs/0022-developer-kit/spec.md`).
 | `scripts/kista_publish.py` | Publishes built extensions to a kista channel, each request signed with the publisher's SSH key (standard-library Python and OpenSSH). |
 | `.github/workflows/_kista_publish.yml` | The reusable publication job. |
 | `.github/workflows/kista.yml` | This fork's own CI for the above. |
-| `.github/workflows/_extension_distribution.yml` | Two inputs for Enterest's builders (below). |
+| `.github/workflows/_extension_distribution.yml` | Inputs for Enterest's builders (below). |
 | `scripts/ci_phase.py` | Writes the licence keys of `license_keys` and names them in `KISTA_LICENSE_KEYS`, in the Linux builds' container too. |
 
 **DuckDB's files.** The fork changes two of DuckDB's files, in blocks marked `kista`: the
@@ -53,6 +53,12 @@ build repository calls it; Enterest's spec 0003). Two inputs serve it:
   written to `kista-license-keys/` beside the sources and passed as `KISTA_LICENSE_KEYS`, so the
   build takes them, not the committed `license-key.pem`. Anything else in the input fails the
   build.
+- **`restore_cache: false`**: no cache is restored (ccache, Go's modules). A build of untrusted
+  code could write a cache entry that another build would then read, so each starts clean.
+- **`timeout_minutes`**: a build job's longest run (GitHub's default, 360, otherwise).
+
+The platform lists (`exclude_archs`, `opt_in_archs`) reach the matrix step's shell as variables,
+since a caller may pass values a developer wrote.
 
 ## The build contract
 
