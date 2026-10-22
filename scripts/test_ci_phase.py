@@ -244,6 +244,47 @@ class CIPhaseTest(unittest.TestCase):
             )
             runner.prebuilt.assert_called_once_with()
 
+    def test_checkout_of_a_commit_is_a_development_build(self):
+        # kista: a DuckDB version given as a commit leaves DUCKDB_VERSION empty for DuckDB's CMake to
+        # name the build itself (its source id in the footer), and keeps the commit for the artifact
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            (workspace / "duckdb").mkdir()
+            github_environment = workspace / "github-environment"
+            github_output = workspace / "github-output"
+            sha = "0123456789abcdef0123456789abcdef01234567"
+            env = self.environment(workspace)
+            env.update(
+                {
+                    "DUCKDB_VERSION": sha,
+                    "GITHUB_ENV": str(github_environment),
+                    "GITHUB_OUTPUT": str(github_output),
+                }
+            )
+            runner = RecordingRunner(env)
+            runner.prebuilt = mock.Mock()
+            runner.checkout()
+            self.assertEqual(
+                [command for command, _ in runner.commands],
+                [
+                    ["git", "-C", "duckdb", "fetch", "origin", sha],
+                    ["git", "-C", "duckdb", "checkout", sha],
+                ],
+            )
+            self.assertEqual(runner.value("DUCKDB_VERSION"), "")
+            self.assertEqual(runner.value("DUCKDB_COMMIT"), sha)
+            self.assertEqual(runner.build_environment()["DUCKDB_VERSION"], "")
+            self.assertEqual(runner.build_environment()["DUCKDB_COMMIT"], sha)
+            self.assertIn(f"duckdb_version={sha}", github_output.read_text(encoding="utf-8"))
+            self.assertIn("DUCKDB_VERSION=\n", github_environment.read_text(encoding="utf-8").replace("\r", "") + "\n")
+
+            artifact = workspace / "build/release/extension/quack/quack.duckdb_extension"
+            artifact.parent.mkdir(parents=True)
+            artifact.touch()
+            runner.env["CI_SKIP_TESTS"] = "true"
+            runner.upload()
+            self.assertIn(f"artifact_name=quack-{sha}-extension-linux_amd64", github_output.read_text(encoding="utf-8"))
+
     def test_checkout_does_not_fetch_prebuilt_without_distribution_flag(self):
         with tempfile.TemporaryDirectory() as directory:
             env = self.environment(directory)

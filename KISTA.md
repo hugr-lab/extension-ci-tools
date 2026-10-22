@@ -57,6 +57,11 @@ build repository calls it; Enterest's spec 0003). Two inputs serve it:
   still installed (the native builds call it). A build of untrusted code could write a cache entry
   that another build would then read, so each starts clean (with `save_cache: false`).
 - **`timeout_minutes`**: a build job's longest run (GitHub's default, 360, otherwise).
+- **`duckdb_version` as a full commit**: a development build of DuckDB (Enterest's builds for the
+  next release). DuckDB is checked out at the commit and names the build itself (`vX.Y.0-devN`, its
+  source id, the commit's first 10 hex digits, in the extension's footer, as a DuckDB built from
+  that commit expects), since `DUCKDB_VERSION` is left empty for its CMake; the artifact is named
+  by the commit, `<extension>-<commit>-extension-<platform>`.
 
 The platform lists (`exclude_archs`, `opt_in_archs`) reach the matrix step's shell as variables,
 since a caller may pass values a developer wrote.

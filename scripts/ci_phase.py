@@ -43,6 +43,8 @@ LICENSE_KEYS_DIRECTORY = "kista-license-keys"
 PEM_PUBLIC_KEY = re.compile(
     r"-----BEGIN PUBLIC KEY-----\r?\n[A-Za-z0-9+/=\r\n]+?-----END PUBLIC KEY-----"
 )
+# kista: a DuckDB version given as a full commit (a development build)
+FULL_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 STAGED_DUCKDB_VERSION_PATTERN = re.compile(
     r"^v[0-9]+\.[0-9]+\.[0-9]+(?:-(?:alpha|rc|dev)[0-9]+)?$"
 )
@@ -233,16 +235,24 @@ class PhaseRunner:
             self.run(["git", "-C", "duckdb", "fetch", "origin", duckdb_ref])
             self.run(["git", "-C", "duckdb", "checkout", duckdb_ref])
 
-        duckdb_version = self.value("DUCKDB_VERSION") or self.value(
-            "DUCKDB_COMMIT"
-        )
+        requested = self.value("DUCKDB_VERSION")
+        duckdb_version = requested or self.value("DUCKDB_COMMIT")
         if not duckdb_version:
             duckdb_version = self.capture(
                 ["git", "-C", "duckdb", "rev-parse", "HEAD"]
             )
             if not duckdb_version:
                 raise ValueError("could not resolve the DuckDB checkout version")
-        self.set_environment("DUCKDB_VERSION", duckdb_version)
+        if FULL_COMMIT_PATTERN.fullmatch(requested):
+            # kista (Enterest's development builds of DuckDB): a version given as a commit is a
+            # development build. DuckDB's CMake names it itself, vX.Y.0-devN with the commit's source
+            # id (its first 10 hex digits) in the extension's footer, when DUCKDB_VERSION is empty and
+            # DUCKDB_COMMIT names the commit; the artifact keeps the commit in its name.
+            self.set_environment("DUCKDB_COMMIT", requested)
+            self.set_environment("CI_DUCKDB_ARTIFACT_VERSION", requested)
+            self.set_environment("DUCKDB_VERSION", "")
+        else:
+            self.set_environment("DUCKDB_VERSION", duckdb_version)
         self.append_github_file("GITHUB_OUTPUT", "duckdb_version", duckdb_version)
 
         extension_tag = self.value("CI_EXTENSION_TAG")
@@ -897,7 +907,8 @@ class PhaseRunner:
         if not matches:
             raise FileNotFoundError(f"no artifact matched {path}")
         name = self.value("CI_ARTIFACT_NAME") or (
-            f"{self.required('CI_EXTENSION_NAME')}-{self.required('DUCKDB_VERSION')}-extension-"
+            f"{self.required('CI_EXTENSION_NAME')}-"
+            f"{self.value('CI_DUCKDB_ARTIFACT_VERSION') or self.required('DUCKDB_VERSION')}-extension-"
             f"{self.architecture}{self.value('CI_ARTIFACT_POSTFIX')}"
         )
         artifact_id = hashlib.sha256(name.encode("utf-8")).hexdigest()[:16]
