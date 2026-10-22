@@ -347,6 +347,8 @@ class Test(unittest.TestCase):
             self.assertEqual(self.run_main(p, extra=["--dry-run"])[0], 1)
         self.assertIn("install OpenSSH 8.1", err.getvalue())
 
+    # the stub is a shell script on PATH, which Windows does not run as ssh-keygen
+    @unittest.skipIf(os.name == "nt", "a shell script stands in for ssh-keygen")
     def test_old_openssh(self):
         # ssh-keygen before 8.1 reads keys but has no -Y: refused before anything is sent, a dry run too
         p = os.path.join(self.dir, "myext.duckdb_extension")
