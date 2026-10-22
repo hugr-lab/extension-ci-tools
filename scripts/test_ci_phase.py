@@ -285,6 +285,27 @@ class CIPhaseTest(unittest.TestCase):
             runner.upload()
             self.assertIn(f"artifact_name=quack-{sha}-extension-linux_amd64", github_output.read_text(encoding="utf-8"))
 
+    def test_checkout_of_a_release_at_its_commit(self):
+        # kista: a release's tag names the version, its commit what is checked out
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            (workspace / "duckdb").mkdir()
+            sha = "0123456789abcdef0123456789abcdef01234567"
+            env = self.environment(workspace)
+            env["DUCKDB_COMMIT"] = sha
+            runner = RecordingRunner(env)
+            runner.prebuilt = mock.Mock()
+            runner.checkout()
+            self.assertEqual(
+                [command for command, _ in runner.commands],
+                [
+                    ["git", "-C", "duckdb", "fetch", "origin", sha],
+                    ["git", "-C", "duckdb", "checkout", sha],
+                ],
+            )
+            self.assertEqual(runner.build_environment()["DUCKDB_VERSION"], "v1.2.3")
+            self.assertEqual(runner.build_environment()["DUCKDB_COMMIT"], sha)
+
     def test_checkout_does_not_fetch_prebuilt_without_distribution_flag(self):
         with tempfile.TemporaryDirectory() as directory:
             env = self.environment(directory)

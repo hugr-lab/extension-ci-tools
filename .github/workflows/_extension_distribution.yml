@@ -34,6 +34,12 @@ on:
         required: false
         type: string
         default: ""
+      # kista: the commit DuckDB is checked out at, when given (a release's tag names the version,
+      # this commit what is built: a tag in the checkout cannot redirect it)
+      duckdb_commit:
+        required: false
+        type: string
+        default: ""
       # The extension-ci-tools ref used by this workflow.
       # Passing this explicitly is required because of https://github.com/actions/toolkit/issues/1264
       ci_tools_version:
@@ -238,6 +244,7 @@ env:
   CI_KISTA_LICENSE_KEYS: ${{ inputs.license_keys }}
   CI_EXTENSION_CANONICAL: ${{ inputs.extension_canonical }}
   DUCKDB_VERSION: ${{ inputs.duckdb_version }}
+  DUCKDB_COMMIT: ${{ inputs.duckdb_commit }}
   CI_DUCKDB_GIT_REPOSITORY: ${{ inputs.override_duckdb_repository }}
   CI_EXTENSION_TAG: ${{ inputs.extension_tag }}
   DUCKDB_TAG: ${{ inputs.duckdb_tag }}
