@@ -397,7 +397,6 @@ jobs:
         run: python3 extension-ci-tools/scripts/ci_phase.py checkout
 
       - name: Setup / Ccache
-        if: ${{ inputs.restore_cache }}
         uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
         continue-on-error: true
         with:
@@ -409,6 +408,9 @@ jobs:
             extension-distribution-${{ matrix.duckdb_arch }}-
             ccache-extension-distribution-${{ matrix.duckdb_arch }}-
           save: ${{ inputs.save_cache }}
+          # kista: ccache is installed either way (the builds call it), its cache restored only with
+          # restore_cache
+          restore: ${{ inputs.restore_cache }}
 
       - name: Setup
         run: python3 extension-ci-tools/scripts/ci_phase.py setup
@@ -527,7 +529,6 @@ jobs:
           cache: ${{ inputs.restore_cache }}
 
       - name: Setup / Ccache
-        if: ${{ inputs.restore_cache }}
         uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
         continue-on-error: true
         with:
@@ -539,6 +540,9 @@ jobs:
             extension-distribution-${{ matrix.duckdb_arch }}-
             ccache-extension-distribution-${{ matrix.duckdb_arch }}-
           save: ${{ inputs.save_cache }}
+          # kista: ccache is installed either way (the builds call it), its cache restored only with
+          # restore_cache
+          restore: ${{ inputs.restore_cache }}
 
       - name: Setup
         run: python3 extension-ci-tools/scripts/ci_phase.py setup
@@ -671,7 +675,6 @@ jobs:
           cache: ${{ inputs.restore_cache }}
 
       - name: Setup / Ccache
-        if: ${{ inputs.restore_cache }}
         uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
         with:
           max-size: 5GB
@@ -682,6 +685,9 @@ jobs:
             extension-distribution-${{ matrix.duckdb_arch }}-
             ccache-extension-distribution-${{ matrix.duckdb_arch }}-
           save: ${{ inputs.save_cache }}
+          # kista: ccache is installed either way (the builds call it), its cache restored only with
+          # restore_cache
+          restore: ${{ inputs.restore_cache }}
 
       - name: Setup / Rtools
         if: ${{ matrix.duckdb_arch == 'windows_amd64_rtools' || matrix.duckdb_arch == 'windows_amd64_mingw' }}
@@ -831,7 +837,6 @@ jobs:
           cache: ${{ inputs.restore_cache }}
 
       - name: Setup / Ccache
-        if: ${{ inputs.restore_cache }}
         uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03 # v1.2.23
         continue-on-error: true
         with:
@@ -843,6 +848,9 @@ jobs:
             extension-distribution-${{ matrix.duckdb_arch }}-
             ccache-extension-distribution-${{ matrix.duckdb_arch }}-
           save: ${{ inputs.save_cache }}
+          # kista: ccache is installed either way (the builds call it), its cache restored only with
+          # restore_cache
+          restore: ${{ inputs.restore_cache }}
 
       - name: Setup
         run: python3 extension-ci-tools/scripts/ci_phase.py setup
