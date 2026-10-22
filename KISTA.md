@@ -53,8 +53,9 @@ build repository calls it; Enterest's spec 0003). Two inputs serve it:
   written to `kista-license-keys/` beside the sources and passed as `KISTA_LICENSE_KEYS`, so the
   build takes them, not the committed `license-key.pem`. Anything else in the input fails the
   build.
-- **`restore_cache: false`**: no cache is restored (ccache, Go's modules). A build of untrusted
-  code could write a cache entry that another build would then read, so each starts clean.
+- **`restore_cache: false`**: no cache is restored (ccache, Go's modules), while ccache itself is
+  still installed (the native builds call it). A build of untrusted code could write a cache entry
+  that another build would then read, so each starts clean (with `save_cache: false`).
 - **`timeout_minutes`**: a build job's longest run (GitHub's default, 360, otherwise).
 
 The platform lists (`exclude_archs`, `opt_in_archs`) reach the matrix step's shell as variables,
