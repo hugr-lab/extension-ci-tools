@@ -247,7 +247,9 @@ class PhaseRunner:
 
         extension_tag = self.value("CI_EXTENSION_TAG")
         if extension_tag:
-            self.run(["git", "tag", extension_tag])
+            # kista: -f, as a clone with the repository's tags may hold it already (pointing
+            # elsewhere: Enterest builds the commit its tag named when seen)
+            self.run(["git", "tag", "-f", extension_tag])
 
         duckdb_tag = self.value("DUCKDB_TAG")
         if duckdb_tag:

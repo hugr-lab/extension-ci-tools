@@ -234,7 +234,7 @@ class CIPhaseTest(unittest.TestCase):
                     ["git", "clone", "duckdb/duckdb-fork", "duckdb"],
                     ["git", "-C", "duckdb", "fetch", "origin", "v1.2.3"],
                     ["git", "-C", "duckdb", "checkout", "v1.2.3"],
-                    ["git", "tag", "v2.0.0"],
+                    ["git", "tag", "-f", "v2.0.0"],
                     ["make", "set_duckdb_tag"],
                 ],
             )
