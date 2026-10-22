@@ -38,6 +38,11 @@ PREBUILT_DUCKDB_ARTIFACTS = {
     "windows_amd64_mingw": "duckdb-static-libs-windows-mingw.tar.gz",
 }
 PREBUILT_DUCKDB_USER_AGENT = "duckdb-extension-ci-tools/prebuilt-duckdb"
+# kista (hugr-lab's fork, KISTA.md): where a build's licence keys are written, and a key's PEM
+LICENSE_KEYS_DIRECTORY = "kista-license-keys"
+PEM_PUBLIC_KEY = re.compile(
+    r"-----BEGIN PUBLIC KEY-----\r?\n[A-Za-z0-9+/=\r\n]+?-----END PUBLIC KEY-----"
+)
 STAGED_DUCKDB_VERSION_PATTERN = re.compile(
     r"^v[0-9]+\.[0-9]+\.[0-9]+(?:-(?:alpha|rc|dev)[0-9]+)?$"
 )
@@ -184,7 +189,30 @@ class PhaseRunner:
     ) -> None:
         self.run([*self.retry_prefix(), *command], extra_env=extra_env)
 
+    def write_license_keys(self) -> None:
+        """kista: the licence keys a builder gives a licensed extension's build (hugr-lab's fork,
+        kista spec 0022), as PEM text in CI_KISTA_LICENSE_KEYS: written beside the sources, named in
+        KISTA_LICENSE_KEYS (kista.Makefile passes it to the extension's CMake)."""
+        text = self.value("CI_KISTA_LICENSE_KEYS").strip()
+        if not text:
+            return
+        keys = PEM_PUBLIC_KEY.findall(text)
+        rest = PEM_PUBLIC_KEY.sub("", text)
+        if not 1 <= len(keys) <= 4 or rest.strip():
+            raise ValueError("license_keys: one to four PEM public keys, nothing else")
+        directory = self.workspace / LICENSE_KEYS_DIRECTORY
+        if directory.exists():
+            shutil.rmtree(directory)
+        directory.mkdir(parents=True)
+        paths = []
+        for number, key in enumerate(keys, start=1):
+            path = directory / f"key-{number}.pem"
+            path.write_text(key.replace("\r\n", "\n") + "\n", encoding="ascii")
+            paths.append(path.as_posix())
+        self.set_environment("KISTA_LICENSE_KEYS", ";".join(paths))
+
     def checkout(self) -> None:
+        self.write_license_keys()
         duckdb_repository = self.value("CI_DUCKDB_GIT_REPOSITORY")
         duckdb_ref = self.duckdb_ref()
         duckdb_directory = self.workspace / "duckdb"
@@ -219,7 +247,9 @@ class PhaseRunner:
 
         extension_tag = self.value("CI_EXTENSION_TAG")
         if extension_tag:
-            self.run(["git", "tag", extension_tag])
+            # kista: -f, as a clone with the repository's tags may hold it already (pointing
+            # elsewhere: Enterest builds the commit its tag named when seen)
+            self.run(["git", "tag", "-f", extension_tag])
 
         duckdb_tag = self.value("DUCKDB_TAG")
         if duckdb_tag:
@@ -666,6 +696,13 @@ class PhaseRunner:
             "SUBSET_EXTENSIONS_TESTS": self.value("CI_EXTENSIONS_TEST_SELECTION"),
             "DUCKDB_PREBUILT_EXTENSIONS": self.value("DUCKDB_PREBUILT_EXTENSIONS"),
         }
+        license_keys = self.value("KISTA_LICENSE_KEYS")
+        if license_keys:
+            # kista: the same files, where the container mounts the workspace
+            values["KISTA_LICENSE_KEYS"] = ";".join(
+                f"/duckdb_build_dir/{Path(key).resolve().relative_to(self.workspace).as_posix()}"
+                for key in license_keys.split(";")
+            )
         values.update(test_environment(self.value("CI_TEST_CONFIG", "{}")))
         prebuilt_library = self.value("DUCKDB_PREBUILT_LIBRARY")
         if prebuilt_library:
