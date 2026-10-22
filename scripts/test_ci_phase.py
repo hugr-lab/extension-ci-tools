@@ -160,6 +160,55 @@ class CIPhaseTest(unittest.TestCase):
             self.assertIn("DUCKDB_VERSION=v2.0.0-alpha39940\n", docker_environment)
             self.assertIn(f"DUCKDB_COMMIT={commit}\n", docker_environment)
 
+    def test_license_keys_are_written_and_named_for_host_and_docker(self):
+        key = (
+            "-----BEGIN PUBLIC KEY-----\n"
+            "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAu1SU1LfVLPHCozMxH2Mo\n"
+            "-----END PUBLIC KEY-----"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory).resolve()
+            env_file = workspace / "github_env"
+            environment = self.environment(workspace)
+            environment["GITHUB_ENV"] = str(env_file)
+            environment["CI_KISTA_LICENSE_KEYS"] = f"{key}\n{key.replace('u1SU', 'v2TV')}\n"
+            runner = RecordingRunner(environment)
+            runner.write_license_keys()
+
+            first = workspace / "kista-license-keys" / "key-1.pem"
+            second = workspace / "kista-license-keys" / "key-2.pem"
+            self.assertEqual(first.read_text(encoding="ascii"), key + "\n")
+            self.assertIn("v2TV", second.read_text(encoding="ascii"))
+            self.assertEqual(
+                runner.value("KISTA_LICENSE_KEYS"), f"{first.as_posix()};{second.as_posix()}"
+            )
+            self.assertIn("KISTA_LICENSE_KEYS=", env_file.read_text(encoding="utf-8"))
+
+            runner.create_docker_environment()
+            docker_env = (workspace / "docker_env.txt").read_text(encoding="utf-8")
+            self.assertIn(
+                "KISTA_LICENSE_KEYS=/duckdb_build_dir/kista-license-keys/key-1.pem;"
+                "/duckdb_build_dir/kista-license-keys/key-2.pem\n",
+                docker_env,
+            )
+
+    def test_license_keys_refuse_anything_but_public_keys(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for text in (
+                "not a key",
+                "-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\n$(id)",
+                "\n".join(["-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----"] * 5),
+            ):
+                environment = self.environment(directory)
+                environment["CI_KISTA_LICENSE_KEYS"] = text
+                with self.assertRaises(ValueError):
+                    RecordingRunner(environment).write_license_keys()
+            # none: nothing written, nothing named
+            runner = RecordingRunner(self.environment(directory))
+            runner.write_license_keys()
+            self.assertEqual(runner.value("KISTA_LICENSE_KEYS"), "")
+            self.assertFalse((Path(directory) / "kista-license-keys").exists())
+
     def test_duckdb_ref_falls_back_to_version(self):
         with tempfile.TemporaryDirectory() as directory:
             runner = RecordingRunner(self.environment(directory))

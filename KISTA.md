@@ -34,9 +34,25 @@ CI. The design is kista's spec 0022 (`specs/0022-developer-kit/spec.md`).
 | `scripts/kista_publish.py` | Publishes built extensions to a kista channel, each request signed with the publisher's SSH key (standard-library Python and OpenSSH). |
 | `.github/workflows/_kista_publish.yml` | The reusable publication job. |
 | `.github/workflows/kista.yml` | This fork's own CI for the above. |
+| `.github/workflows/_extension_distribution.yml` | Two inputs for Enterest's builders (below). |
+| `scripts/ci_phase.py` | Writes the licence keys of `license_keys` and names them in `KISTA_LICENSE_KEYS`, in the Linux builds' container too. |
 
-**DuckDB's files.** The fork changes none of DuckDB's files. Merges from upstream conflict only
-where both sides changed a file, so they stay simple.
+**DuckDB's files.** The fork changes two of DuckDB's files, in blocks marked `kista`: the
+distribution workflow (its inputs and the extension's checkout) and `scripts/ci_phase.py`. Merges
+from upstream conflict only where both sides changed those blocks, so they stay simple.
+
+## Building for Enterest
+
+Enterest builds an extension's version from its repository with the distribution workflow (its
+build repository calls it; Enterest's spec 0003). Two inputs serve it:
+
+- **`override_repository_url`**: the repository by its https git URL, on any git host, checked out
+  at `override_ref` (a commit) with its submodules. It takes the place of `override_repository`,
+  which reaches GitHub only.
+- **`license_keys`**: the licence keys to build with, as one to four PEM public keys. They are
+  written to `kista-license-keys/` beside the sources and passed as `KISTA_LICENSE_KEYS`, so the
+  build takes them, not the committed `license-key.pem`. Anything else in the input fails the
+  build.
 
 ## The build contract
 

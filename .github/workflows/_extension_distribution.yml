@@ -94,6 +94,18 @@ on:
         required: false
         type: string
         default: ""
+      # kista (hugr-lab's fork): the repository to build by its https git URL, on any git host
+      # (Enterest's builders), checked out at override_ref; it takes the place of override_repository
+      override_repository_url:
+        required: false
+        type: string
+        default: ""
+      # kista: the licence keys a licensed extension is built with, as PEM public keys (one to four);
+      # written beside the sources and passed as KISTA_LICENSE_KEYS (makefiles/kista.Makefile)
+      license_keys:
+        required: false
+        type: string
+        default: ""
       # Override the repo for the CI tools (for testing CI tools itself)
       override_ci_tools_repository:
         required: false
@@ -212,6 +224,7 @@ env:
   USE_MERGED_VCPKG_MANIFEST: ${{ inputs.use_merged_vcpkg_manifest }}
   USE_DEFAULT_RUNNERS: ${{ inputs.runners == '{}' }}
   CI_EXTENSION_NAME: ${{ inputs.extension_name }}
+  CI_KISTA_LICENSE_KEYS: ${{ inputs.license_keys }}
   CI_EXTENSION_CANONICAL: ${{ inputs.extension_canonical }}
   DUCKDB_VERSION: ${{ inputs.duckdb_version }}
   CI_DUCKDB_GIT_REPOSITORY: ${{ inputs.override_duckdb_repository }}
@@ -309,12 +322,31 @@ jobs:
 
     steps:
       - name: Checkout / Extension repository
+        if: ${{ inputs.override_repository_url == '' }}
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ${{ inputs.override_repository != '' && inputs.override_repository || github.repository }}
           ref: ${{ inputs.override_repository != '' && inputs.override_ref || '' }}
           fetch-depth: 0
           submodules: recursive
+
+      # kista: a repository on any git host, by its URL (the inputs reach the shell as variables)
+      - name: Checkout / Extension repository by its git URL
+        if: ${{ inputs.override_repository_url != '' }}
+        shell: bash
+        env:
+          REPOSITORY_URL: ${{ inputs.override_repository_url }}
+          REPOSITORY_REF: ${{ inputs.override_ref }}
+        run: |
+          case "$REPOSITORY_URL" in https://*) ;; *) echo "override_repository_url: an https URL" >&2; exit 1 ;; esac
+          [ -n "$REPOSITORY_REF" ] || { echo "override_ref: the commit to build" >&2; exit 1; }
+          git -c init.defaultBranch=main init -q .
+          git remote add origin "$REPOSITORY_URL"
+          git fetch -q --tags origin '+refs/heads/*:refs/remotes/origin/*'
+          # a commit no branch or tag reaches: asked for by itself
+          git cat-file -e "$REPOSITORY_REF^{commit}" 2>/dev/null || git fetch -q origin "$REPOSITORY_REF"
+          git -c advice.detachedHead=false checkout -q "$REPOSITORY_REF"
+          git submodule update -q --init --recursive
 
       - name: Checkout / Extension CI tools
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -419,12 +451,31 @@ jobs:
 
     steps:
       - name: Checkout / Extension repository
+        if: ${{ inputs.override_repository_url == '' }}
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ${{ inputs.override_repository != '' && inputs.override_repository || github.repository }}
           ref: ${{ inputs.override_repository != '' && inputs.override_ref || '' }}
           fetch-depth: 0
           submodules: recursive
+
+      # kista: a repository on any git host, by its URL (the inputs reach the shell as variables)
+      - name: Checkout / Extension repository by its git URL
+        if: ${{ inputs.override_repository_url != '' }}
+        shell: bash
+        env:
+          REPOSITORY_URL: ${{ inputs.override_repository_url }}
+          REPOSITORY_REF: ${{ inputs.override_ref }}
+        run: |
+          case "$REPOSITORY_URL" in https://*) ;; *) echo "override_repository_url: an https URL" >&2; exit 1 ;; esac
+          [ -n "$REPOSITORY_REF" ] || { echo "override_ref: the commit to build" >&2; exit 1; }
+          git -c init.defaultBranch=main init -q .
+          git remote add origin "$REPOSITORY_URL"
+          git fetch -q --tags origin '+refs/heads/*:refs/remotes/origin/*'
+          # a commit no branch or tag reaches: asked for by itself
+          git cat-file -e "$REPOSITORY_REF^{commit}" 2>/dev/null || git fetch -q origin "$REPOSITORY_REF"
+          git -c advice.detachedHead=false checkout -q "$REPOSITORY_REF"
+          git submodule update -q --init --recursive
 
       - name: Checkout / Extension CI tools
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -532,12 +583,31 @@ jobs:
           git config --global core.eol lf
 
       - name: Checkout / Extension repository
+        if: ${{ inputs.override_repository_url == '' }}
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ${{ inputs.override_repository != '' && inputs.override_repository || github.repository }}
           ref: ${{ inputs.override_repository != '' && inputs.override_ref || '' }}
           fetch-depth: 0
           submodules: recursive
+
+      # kista: a repository on any git host, by its URL (the inputs reach the shell as variables)
+      - name: Checkout / Extension repository by its git URL
+        if: ${{ inputs.override_repository_url != '' }}
+        shell: bash
+        env:
+          REPOSITORY_URL: ${{ inputs.override_repository_url }}
+          REPOSITORY_REF: ${{ inputs.override_ref }}
+        run: |
+          case "$REPOSITORY_URL" in https://*) ;; *) echo "override_repository_url: an https URL" >&2; exit 1 ;; esac
+          [ -n "$REPOSITORY_REF" ] || { echo "override_ref: the commit to build" >&2; exit 1; }
+          git -c init.defaultBranch=main init -q .
+          git remote add origin "$REPOSITORY_URL"
+          git fetch -q --tags origin '+refs/heads/*:refs/remotes/origin/*'
+          # a commit no branch or tag reaches: asked for by itself
+          git cat-file -e "$REPOSITORY_REF^{commit}" 2>/dev/null || git fetch -q origin "$REPOSITORY_REF"
+          git -c advice.detachedHead=false checkout -q "$REPOSITORY_REF"
+          git submodule update -q --init --recursive
 
       - name: Checkout / Extension CI tools
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -668,12 +738,31 @@ jobs:
 
     steps:
       - name: Checkout / Extension repository
+        if: ${{ inputs.override_repository_url == '' }}
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: ${{ inputs.override_repository != '' && inputs.override_repository || github.repository }}
           ref: ${{ inputs.override_repository != '' && inputs.override_ref || '' }}
           fetch-depth: 0
           submodules: recursive
+
+      # kista: a repository on any git host, by its URL (the inputs reach the shell as variables)
+      - name: Checkout / Extension repository by its git URL
+        if: ${{ inputs.override_repository_url != '' }}
+        shell: bash
+        env:
+          REPOSITORY_URL: ${{ inputs.override_repository_url }}
+          REPOSITORY_REF: ${{ inputs.override_ref }}
+        run: |
+          case "$REPOSITORY_URL" in https://*) ;; *) echo "override_repository_url: an https URL" >&2; exit 1 ;; esac
+          [ -n "$REPOSITORY_REF" ] || { echo "override_ref: the commit to build" >&2; exit 1; }
+          git -c init.defaultBranch=main init -q .
+          git remote add origin "$REPOSITORY_URL"
+          git fetch -q --tags origin '+refs/heads/*:refs/remotes/origin/*'
+          # a commit no branch or tag reaches: asked for by itself
+          git cat-file -e "$REPOSITORY_REF^{commit}" 2>/dev/null || git fetch -q origin "$REPOSITORY_REF"
+          git -c advice.detachedHead=false checkout -q "$REPOSITORY_REF"
+          git submodule update -q --init --recursive
 
       - name: Checkout / Extension CI tools
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
