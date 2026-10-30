@@ -102,6 +102,7 @@ jobs:
           fi
           # a path in the calling repository, as written: no pattern a sparse checkout would expand
           case "$KISTA_ICON" in
+            ./*) echo "::error::icon is written without a leading ./ (as docs/icon.png)"; exit 1;;
             /*|..|../*|*/..|*/../*|*[*?!#\\]*|*\[*|*\]*|*$'\n'*|*$'\r'*)
               echo "::error::icon is a file's path inside the calling repository, without .., patterns or line ends"; exit 1;;
           esac
@@ -163,7 +164,7 @@ jobs:
             # the file itself, inside the calling repository's checkout (a link out of it is refused)
             icon=$(realpath -e -- "caller/$KISTA_ICON") || { echo "::error::icon: no $KISTA_ICON in the calling repository"; exit 1; }
             case "$icon" in
-              "$GITHUB_WORKSPACE/caller/"*) ;;
+              "$(realpath -e caller)/"*) ;;
               *) echo "::error::icon: $KISTA_ICON leads out of the calling repository"; exit 1;;
             esac
             [ -f "$icon" ] || { echo "::error::icon: $KISTA_ICON is not a file"; exit 1; }

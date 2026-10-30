@@ -134,8 +134,8 @@ on every name, and of no other package type:
 kista admin grant add <tenant> -principal publisher:<publisher> -verb publish -extension myext
 ```
 
-The job's first step tests it (`--check --catalogue --name myext`), unless the publisher is a
-distributor's, which needs no grant.
+The job tests it before it publishes (`--check --catalogue --name myext`, after checking its inputs
+and downloading the builds), unless the publisher is a distributor's, which needs no grant.
 
 **The entry's summary and icon** (kista spec 0036). `entry_summary` and `icon` set the catalogue
 entry's metadata once its builds are published, with a channel's publication too. The entry's
@@ -146,7 +146,8 @@ as kista stores it: trimmed, NFC).
   the job failed. The summary is plain text on one line, at most 160 characters. The icon is a
   square PNG of 64 to 512 pixels, at most 256 KiB, without text, Exif or colour-profile chunks
   (`oxipng --strip all icon.png` strips them); kista checks its chunks and names the rule it breaks.
-- `icon` is a file's path in the calling repository, as written: no `..`, no pattern characters
+  These checks mirror kista's, and kista decides finally (its Unicode tables may differ from Python's).
+- `icon` is a file's path in the calling repository, as written: no leading `./`, no `..`, no pattern characters
   (`*?[]!#\`), no line ends. That file alone is checked out (with Git LFS), and it must stay inside
   the checkout: a link out of it is refused.
 

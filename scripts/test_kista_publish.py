@@ -735,6 +735,8 @@ class Test(unittest.TestCase):
         self.assertEqual(check([{"verbs": ["publish"], "extension_group": "ours"}]), 0)  # its members are not shown
         self.assertEqual(check([{"verbs": ["publish"], "extension": "other"}]), 1)
         self.assertEqual(check([{"verbs": ["publish"], "package_type": "adbc_driver"}]), 1)
+        # a nameless grant of DuckDB extensions: whoami shows its type, and it reaches every extension
+        self.assertEqual(check([{"verbs": ["publish"], "package_type": "duckdb_extension"}]), 0)
 
     def test_one_entry_without_name(self):
         for n in ["one", "two"]:

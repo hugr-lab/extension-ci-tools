@@ -443,8 +443,9 @@ def parsed(text):
 def publishes(g, channel, name):
     """Whether a grant lets publish a DuckDB extension (name, when given) in the channel ("" for the
     catalogue: a tenant-wide grant only). An extension group's grant is taken as it is (its members are
-    not shown); a grant of another package type does not reach an extension."""
-    return ("publish" in (g.get("verbs") or []) and not g.get("package_type")
+    not shown); a grant of another package type does not reach an extension (whoami shows a nameless
+    grant's type when it is not every type: duckdb_extension reaches every extension)."""
+    return ("publish" in (g.get("verbs") or []) and (g.get("package_type") or "") in ("", "duckdb_extension")
             and (g.get("channel") or "") in ("", channel)
             and (not name or (g.get("extension") or "") in ("", name)))
 
