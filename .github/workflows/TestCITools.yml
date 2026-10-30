@@ -4,7 +4,10 @@
 
 name: Test CI Tools
 on:
+  # a branch with a pull request is tested by pull_request alone: one run, not two, so macOS jobs
+  # (five at once on the organisation's plan) are not spent twice
   push:
+    branches: [main]
     paths-ignore:
       - '*.md'
       - '**/*.md'
@@ -76,7 +79,7 @@ jobs:
         ${{
           github.repository_owner == 'duckdb'
           && '{"linux_x64":"ubuntu-latest","osx_arm64":"namespace-profile-macos-arm64"}'
-          || '{"linux_x64":"ubuntu-latest","osx_arm64":"macos-14"}'
+          || '{"linux_x64":"ubuntu-latest","osx_arm64":"macos-15"}'
         }}
       exclude_archs: 'linux_arm64;osx_amd64;wasm_eh;wasm_mvp;wasm_threads;windows_amd64_mingw;windows_amd64'
       reduced_ci_mode: disabled
