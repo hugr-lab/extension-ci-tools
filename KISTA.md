@@ -62,9 +62,11 @@ build repository calls it; Enterest's spec 0003). Two inputs serve it:
   source id, the commit's first 10 hex digits, in the extension's footer, as a DuckDB built from
   that commit expects), since `DUCKDB_VERSION` is left empty for its CMake; the artifact is named
   by the commit, `<extension>-<commit>-extension-<platform>`.
-- **`duckdb_commit`**: the commit DuckDB is checked out at, beside a release's tag in
-  `duckdb_version` (which still names the version): a tag in the extension's `duckdb` submodule
-  cannot redirect what is built.
+- **`duckdb_commit`** (upstream has the same input; the fork uses it this way): the commit DuckDB
+  is checked out at, beside a release's tag in `duckdb_version` (which still names the version): a
+  tag in the extension's `duckdb` submodule cannot redirect what is built. Given without
+  `duckdb_version`, the version is the highest version tag at the commit
+  (`vX.Y.Z[-alphaN|-rcN|-devN]`), or the commit itself.
 
 The platform lists (`exclude_archs`, `opt_in_archs`) reach the matrix step's shell as variables,
 since a caller may pass values a developer wrote.

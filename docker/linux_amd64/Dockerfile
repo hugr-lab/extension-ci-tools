@@ -1,5 +1,8 @@
 FROM quay.io/pypa/manylinux_2_28_x86_64
 
+# Disable EPEL repo (mirrors are down since EPEL 8 retirement)
+RUN yum-config-manager --disable epel || true
+
 # Setup the basic necessities
 RUN yum groupinstall -y "Development Tools"
 RUN yum install -y curl zip unzip tar autoconf libtool
@@ -120,20 +123,11 @@ RUN case "$extra_toolchains" in \
 esac
 
 # Install CUDA toolkit (nvcc, dev headers, runtime)
+COPY install_cuda.sh /tmp/install_cuda.sh
 ARG cuda_version=13
 RUN case "$extra_toolchains" in \
   *\;cuda\;*) \
-    yum install -y yum-utils && \
-    yum-config-manager --add-repo \
-      https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo && \
-    yum install -y \
-      cuda-nvcc-${cuda_version}-* \
-      cuda-cudart-devel-${cuda_version}-* \
-      cuda-driver-devel-${cuda_version}-* \
-      cuda-nvml-devel-${cuda_version}-* \
-      libcurand-devel-${cuda_version}-* \
-      libnvjitlink-devel-${cuda_version}-* \
-      cuda-nvrtc-devel-${cuda_version}-* \
+    bash /tmp/install_cuda.sh "${cuda_version}" linux-x86_64 \
   ;; \
 esac
 ENV PATH="/usr/local/cuda/bin:${PATH}"

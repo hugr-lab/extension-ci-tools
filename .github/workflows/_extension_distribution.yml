@@ -34,12 +34,6 @@ on:
         required: false
         type: string
         default: ""
-      # kista: the commit DuckDB is checked out at, when given (a release's tag names the version,
-      # this commit what is built: a tag in the checkout cannot redirect it)
-      duckdb_commit:
-        required: false
-        type: string
-        default: ""
       # The extension-ci-tools ref used by this workflow.
       # Passing this explicitly is required because of https://github.com/actions/toolkit/issues/1264
       ci_tools_version:
@@ -160,6 +154,13 @@ on:
         default: ""
       # Optional tag the referenced duckdb should have -- this is a easy to misuse, and subject to change, for internal use only
       duckdb_tag:
+        required: false
+        type: string
+        default: ""
+      # Optional DuckDB commit SHA -- useful for building against untagged versions of DuckDB
+      # kista: the commit DuckDB is checked out at, when given (a release's tag names the version,
+      # this commit what is built: a tag in the checkout cannot redirect it)
+      duckdb_commit:
         required: false
         type: string
         default: ""
@@ -828,7 +829,7 @@ jobs:
       - name: Setup / Emscripten
         uses: emscripten-core/setup-emsdk@4528d102f7230f0e7b276855c01ea1159be0e984 # v16
         with:
-          version: 3.1.71
+          version: 6.0.9
 
       - name: Setup / Rust
         if: ${{ inputs.enable_rust || contains(format(';{0};', inputs.extra_toolchains), ';rust;') }}
