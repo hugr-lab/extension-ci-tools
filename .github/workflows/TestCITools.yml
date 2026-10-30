@@ -4,7 +4,10 @@
 
 name: Test CI Tools
 on:
+  # a branch with a pull request is tested by pull_request alone: one run, not two, so macOS jobs
+  # (five at once on the organisation's plan) are not spent twice
   push:
+    branches: [main]
     paths-ignore:
       - '*.md'
       - '**/*.md'
