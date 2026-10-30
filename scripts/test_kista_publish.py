@@ -627,11 +627,14 @@ class Test(unittest.TestCase):
         big, _ = self.icon(256 * 1024, name="big.png")
         oblong, _ = self.icon(width=64, height=128, name="oblong.png")
         tiny, _ = self.icon(width=32, height=32, name="tiny.png")
-        link = os.path.join(self.dir, "link.png")
-        os.symlink(self.icon(name="real.png")[0], link)
-        for path, says in [(not_png, "the icon is a PNG"), (big, "at most 256 KiB"), (oblong, "square, 64 to 512 pixels a side (this "
-                           "one is 64x128)"), (tiny, "this one is 32x32"), (link, "symbolic link"),
-                           (os.path.join(self.dir, "none.png"), "none.png")]:
+        cases = [(not_png, "the icon is a PNG"), (big, "at most 256 KiB"), (oblong, "square, 64 to 512 pixels a side (this "
+                 "one is 64x128)"), (tiny, "this one is 32x32"), (os.path.join(self.dir, "none.png"), "none.png")]
+        # a symbolic link (the publish workflow runs on Linux; Windows makes one only with a privilege)
+        if os.name != "nt":
+            link = os.path.join(self.dir, "link.png")
+            os.symlink(self.icon(name="real.png")[0], link)
+            cases.append((link, "symbolic link"))
+        for path, says in cases:
             err = io.StringIO()
             with contextlib.redirect_stderr(err):
                 self.assertEqual(self.run_main(p, where=("--catalogue",), extra=["--icon", path])[0], 1)
