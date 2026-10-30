@@ -31,7 +31,7 @@ CI. The design is kista's spec 0022 (`specs/0022-developer-kit/spec.md`).
 | `kista/scripts/sdk-test.sh` | Builds DuckDB at the pin with the SDK's test extension, then runs the SDK's tests. |
 | `kista/scripts/kista-vectors.sh` | Copies or checks the vectors against a kista checkout. |
 | `makefiles/kista.Makefile` | Passes `KISTA_LICENSE_KEYS` to the extension's CMake. |
-| `scripts/kista_publish.py` | Publishes built extensions to a kista channel, each request signed with the publisher's SSH key (standard-library Python and OpenSSH). |
+| `scripts/kista_publish.py` | Publishes built extensions to a kista channel or the tenant's catalogue, and sets a catalogue entry's summary and icon, each request signed with the publisher's SSH key (standard-library Python and OpenSSH). |
 | `.github/workflows/_kista_publish.yml` | The reusable publication job. |
 | `.github/workflows/kista.yml` | This fork's own CI for the above. |
 | `.github/workflows/_extension_distribution.yml` | Inputs for Enterest's builders (below). |
@@ -118,6 +118,38 @@ jobs:
 - It uploads each platform's build as it is. kista checks it and signs it with the channel's key,
   so no signing key is needed in CI.
 - It skips wasm builds while kista does not take them, and says so in the job summary.
+- It retries a busy kista (a `429` typed `rate-limited`, `upload-slots` or `ingest-busy`, after its
+  `Retry-After`; a `408`, a `5xx`, a broken connection), signing again. A `429` typed
+  `catalogue-full` or `tenant-limit` clears only when room is made in kista: the job stops there,
+  sends nothing more and fails, and the summary says so.
+
+**Into the catalogue** (kista spec 0033). With `catalogue: true` and no `channel`, the builds go into
+the tenant's catalogue only, placed in no channel: the channels take them by their rules, or an
+administrator places them. A publisher with a hold must publish so (a channel answers it `409`
+`held`), and its builds are held until their time; the summary shows until when. The publisher
+needs a `publish` grant without a channel: on the extension, on an extension group holding it, or
+on every name, and of no other package type:
+
+```text
+kista admin grant add <tenant> -principal publisher:<publisher> -verb publish -extension myext
+```
+
+The job tests it before it publishes (`--check --catalogue --name myext`, after checking its inputs
+and downloading the builds), unless the publisher is a distributor's, which needs no grant.
+
+**The entry's summary and icon** (kista spec 0036). `entry_summary` and `icon` set the catalogue
+entry's metadata once its builds are published, with a channel's publication too. The entry's
+metadata is read and merged: an input left empty keeps what kista has, and an icon kista has already
+is kept by its hash, not sent again; nothing is written when nothing changes (a summary is compared
+as kista stores it: trimmed, NFC).
+- Both are checked before anything is published, so a bad value never leaves builds published and
+  the job failed. The summary is plain text on one line, at most 160 characters. The icon is a
+  square PNG of 64 to 512 pixels, at most 256 KiB, without text, Exif or colour-profile chunks
+  (`oxipng --strip all icon.png` strips them); kista checks its chunks and names the rule it breaks.
+  These checks mirror kista's, and kista decides finally (its Unicode tables may differ from Python's).
+- `icon` is a file's path in the calling repository, as written: no leading `./`, no `..`, no pattern characters
+  (`*?[]!#\`), no line ends. That file alone is checked out (with Git LFS), and it must stay inside
+  the checkout: a link out of it is refused.
 
 **The publisher key** (kista spec 0023). Each request is signed with the publisher's SSH key, like
 an SSH key on GitHub: kista holds only the public half. Once, for a repository:
@@ -142,8 +174,9 @@ gh variable set KISTA_URL --body <kista URL>; gh variable set KISTA_TENANT --bod
 rm publisher_key
 ```
 
-`--check` signs a `whoami`: it fails on a key kista does not know, and, with `--channel`, on a
-publisher without a `publish` grant there. To replace the key, register the new one, replace the
+`--check` signs a `whoami`: it fails on a key kista does not know, and, with `--channel` or
+`--catalogue`, on a publisher without a `publish` grant there (with `--name`, one reaching that
+extension). To replace the key, register the new one, replace the
 secret, and remove the old one in kista (`kista admin publisher key list|remove`).
 
 For a licensed extension whose keys kista should record, a server administrator marks the publisher
@@ -174,9 +207,14 @@ copies it to a private file of its own, in `RUNNER_TEMP` when set, and removes i
 python3 extension-ci-tools/scripts/kista_publish.py --url https://kista.example.org --tenant acme --check
 python3 extension-ci-tools/scripts/kista_publish.py --url https://kista.example.org \
   --tenant acme --channel prod build/release/extension/myext/myext.duckdb_extension
+# into the catalogue, with the entry's summary and icon
+python3 extension-ci-tools/scripts/kista_publish.py --url https://kista.example.org --tenant acme --catalogue \
+  --entry-summary 'Geometry tools' --icon docs/icon.png build/release/extension/myext/myext.duckdb_extension
 ```
 
 `--dry-run` prints the statements it would sign and the key's fingerprint, and sends nothing.
+`--entry-summary ''` or `--icon ''` clears that field. They set one extension's entry: with files of
+several extensions, give `--name`.
 
 ## Upstream
 
