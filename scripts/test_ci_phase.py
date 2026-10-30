@@ -550,6 +550,43 @@ class CIPhaseTest(unittest.TestCase):
             self.assertEqual(runner.build_environment()["DUCKDB_COMMIT"], sha)
             self.assertEqual(runner.value("CI_DUCKDB_ARTIFACT_VERSION"), "")
 
+    def test_checkout_of_a_commit_alone_without_a_tag_is_a_development_build(self):
+        # kista: a commit without a version and without a version tag resolves to the commit,
+        # which is a development build: DUCKDB_VERSION empty for DuckDB's CMake (not the hash,
+        # which would go into the footer and DuckDB would refuse to load the extension)
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            (workspace / "duckdb").mkdir()
+            github_output = workspace / "github-output"
+            sha = "0123456789abcdef0123456789abcdef01234567"
+            env = self.environment(workspace)
+            env.update(
+                {
+                    "DUCKDB_VERSION": "",
+                    "DUCKDB_COMMIT": sha,
+                    "GITHUB_OUTPUT": str(github_output),
+                }
+            )
+            runner = RecordingRunner(env)
+            runner.captured_outputs = ["not-a-version", sha]
+            runner.prebuilt = mock.Mock()
+            with redirect_stdout(io.StringIO()):
+                runner.checkout()
+            self.assertEqual(
+                [command for command, _ in runner.commands],
+                [
+                    ["git", "-C", "duckdb", "fetch", "origin", sha],
+                    ["git", "-C", "duckdb", "checkout", sha],
+                    ["git", "-C", "duckdb", "fetch", "origin", "--tags", "--force"],
+                    ["git", "-C", "duckdb", "tag", "--points-at", "HEAD"],
+                    ["git", "-C", "duckdb", "rev-parse", "HEAD"],
+                ],
+            )
+            self.assertEqual(runner.build_environment()["DUCKDB_VERSION"], "")
+            self.assertEqual(runner.build_environment()["DUCKDB_COMMIT"], sha)
+            self.assertEqual(runner.value("CI_DUCKDB_ARTIFACT_VERSION"), sha)
+            self.assertIn(f"duckdb_version={sha}", github_output.read_text(encoding="utf-8"))
+
     def test_checkout_does_not_fetch_prebuilt_without_distribution_flag(self):
         with tempfile.TemporaryDirectory() as directory:
             env = self.environment(directory)
@@ -642,7 +679,9 @@ class CIPhaseTest(unittest.TestCase):
                     ["git", "-C", "duckdb", "rev-parse", "HEAD"],
                 ],
             )
-            self.assertEqual(runner.env["DUCKDB_VERSION"], sha)
+            # kista: a commit without a version tag is a development build (DuckDB's CMake names it)
+            self.assertEqual(runner.env["DUCKDB_VERSION"], "")
+            self.assertEqual(runner.env["DUCKDB_COMMIT"], sha)
             self.assertIn("DuckDB tags pointing at HEAD: (none)", output.getvalue())
             self.assertIn(
                 f"No supported DuckDB version tag found; using commit: {sha}",
@@ -650,7 +689,7 @@ class CIPhaseTest(unittest.TestCase):
             )
             self.assertEqual(
                 github_environment.read_text(encoding="utf-8"),
-                f"DUCKDB_VERSION={sha}\n",
+                f"DUCKDB_COMMIT={sha}\nCI_DUCKDB_ARTIFACT_VERSION={sha}\nDUCKDB_VERSION=\n",
             )
             self.assertEqual(
                 github_output.read_text(encoding="utf-8"),

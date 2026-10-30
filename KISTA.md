@@ -66,7 +66,7 @@ build repository calls it; Enterest's spec 0003). Two inputs serve it:
   is checked out at, beside a release's tag in `duckdb_version` (which still names the version): a
   tag in the extension's `duckdb` submodule cannot redirect what is built. Given without
   `duckdb_version`, the version is the highest version tag at the commit
-  (`vX.Y.Z[-alphaN|-rcN|-devN]`), or the commit itself.
+  (`vX.Y.Z[-alphaN|-rcN|-devN]`); a commit without one is a development build, as above.
 
 The platform lists (`exclude_archs`, `opt_in_archs`) reach the matrix step's shell as variables,
 since a caller may pass values a developer wrote.

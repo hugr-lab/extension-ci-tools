@@ -361,8 +361,7 @@ class PhaseRunner:
             self.run(["git", "-C", "duckdb", "fetch", "origin", duckdb_ref])
             self.run(["git", "-C", "duckdb", "checkout", duckdb_ref])
 
-        requested = self.value("DUCKDB_VERSION")
-        duckdb_version = requested
+        duckdb_version = self.value("DUCKDB_VERSION")
         if not duckdb_version:
             self.run(["git", "-C", "duckdb", "fetch", "origin", "--tags", "--force"])
             tags = sorted(
@@ -394,13 +393,14 @@ class PhaseRunner:
                 )
             if not duckdb_version:
                 raise ValueError("could not resolve the DuckDB checkout version")
-        if FULL_COMMIT_PATTERN.fullmatch(requested):
-            # kista (Enterest's development builds of DuckDB): a version given as a commit is a
-            # development build. DuckDB's CMake names it itself, vX.Y.0-devN with the commit's source
-            # id (its first 10 hex digits) in the extension's footer, when DUCKDB_VERSION is empty and
-            # DUCKDB_COMMIT names the commit; the artifact keeps the commit in its name.
-            self.set_environment("DUCKDB_COMMIT", requested)
-            self.set_environment("CI_DUCKDB_ARTIFACT_VERSION", requested)
+        if FULL_COMMIT_PATTERN.fullmatch(duckdb_version):
+            # kista (Enterest's development builds of DuckDB): a version that is a commit, given so
+            # or resolved so (a commit without a version tag), is a development build. DuckDB's CMake
+            # names it itself, vX.Y.0-devN with the commit's source id (its first 10 hex digits) in
+            # the extension's footer, when DUCKDB_VERSION is empty and DUCKDB_COMMIT names the
+            # commit; the artifact keeps the commit in its name.
+            self.set_environment("DUCKDB_COMMIT", duckdb_version)
+            self.set_environment("CI_DUCKDB_ARTIFACT_VERSION", duckdb_version)
             self.set_environment("DUCKDB_VERSION", "")
         else:
             self.set_environment("DUCKDB_VERSION", duckdb_version)
