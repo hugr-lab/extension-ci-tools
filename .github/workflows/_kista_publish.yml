@@ -89,6 +89,26 @@ jobs:
     permissions:
       contents: read
     steps:
+      # the inputs, before anything is checked out or downloaded
+      - name: Check the inputs
+        env:
+          KISTA_CHANNEL: ${{ inputs.channel }}
+          KISTA_CATALOGUE: ${{ inputs.catalogue }}
+          KISTA_ICON: ${{ inputs.icon }}
+          KISTA_ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          if { [ "$KISTA_CATALOGUE" = true ] && [ -n "$KISTA_CHANNEL" ]; } || { [ "$KISTA_CATALOGUE" != true ] && [ -z "$KISTA_CHANNEL" ]; }; then
+            echo "::error::give a channel, or catalogue: true (one of the two)"; exit 1
+          fi
+          # a path in the calling repository, as written: no pattern a sparse checkout would expand
+          case "$KISTA_ICON" in
+            /*|..|../*|*/..|*/../*|*[*?!#\\]*|*\[*|*\]*|*$'\n'*|*$'\r'*)
+              echo "::error::icon is a file's path inside the calling repository, without .., patterns or line ends"; exit 1;;
+          esac
+          if [ -z "$KISTA_ENVIRONMENT" ]; then
+            echo "::warning::no environment: any workflow of this repository that can read the KISTA_PUBLISHER_KEY secret can publish; keep it an environment's secret behind protection rules"
+          fi
+
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           repository: hugr-lab/extension-ci-tools
@@ -102,6 +122,7 @@ jobs:
         with:
           path: caller
           persist-credentials: false
+          lfs: true  # an icon kept in Git LFS is its content, not a pointer
           sparse-checkout: ${{ inputs.icon }}
           sparse-checkout-cone-mode: false
 
@@ -110,28 +131,18 @@ jobs:
           pattern: ${{ inputs.extension_name }}-*-extension-*${{ inputs.artifact_postfix }}
           path: artifacts
 
-      - name: Check the inputs and the key
+      - name: Check the key
         env:
           KISTA_PUBLISHER_KEY: ${{ secrets.KISTA_PUBLISHER_KEY }}
           KISTA_URL: ${{ inputs.kista_url }}
           KISTA_TENANT: ${{ inputs.tenant }}
           KISTA_CHANNEL: ${{ inputs.channel }}
           KISTA_CATALOGUE: ${{ inputs.catalogue }}
-          KISTA_ICON: ${{ inputs.icon }}
-          KISTA_ENVIRONMENT: ${{ inputs.environment }}
+          EXTENSION_NAME: ${{ inputs.extension_name }}
         run: |
-          if { [ "$KISTA_CATALOGUE" = true ] && [ -n "$KISTA_CHANNEL" ]; } || { [ "$KISTA_CATALOGUE" != true ] && [ -z "$KISTA_CHANNEL" ]; }; then
-            echo "::error::give a channel, or catalogue: true (one of the two)"; exit 1
-          fi
-          case "$KISTA_ICON" in
-            /*|..|../*|*/..|*/../*) echo "::error::icon is a path inside the calling repository"; exit 1;;
-          esac
-          if [ -z "$KISTA_ENVIRONMENT" ]; then
-            echo "::warning::no environment: any workflow of this repository that can read the KISTA_PUBLISHER_KEY secret can publish; keep it an environment's secret behind protection rules"
-          fi
-          if [ "$KISTA_CATALOGUE" = true ]; then where=(--catalogue); else where=(--channel "$KISTA_CHANNEL"); fi
+          if [ "$KISTA_CATALOGUE" = true ]; then where=(--catalogue); else where=(--channel="$KISTA_CHANNEL"); fi
           python3 extension-ci-tools/scripts/kista_publish.py --url "$KISTA_URL" --tenant "$KISTA_TENANT" \
-            "${where[@]}" --check >/dev/null
+            "${where[@]}" --name="$EXTENSION_NAME" --check >/dev/null
 
       - name: Publish
         env:
@@ -146,9 +157,18 @@ jobs:
           EXTENSION_NAME: ${{ inputs.extension_name }}
           ARTIFACT_POSTFIX: ${{ inputs.artifact_postfix }}
         run: |
-          if [ "$KISTA_CATALOGUE" = true ]; then args=(--catalogue); else args=(--channel "$KISTA_CHANNEL"); fi
-          if [ -n "$KISTA_ENTRY_SUMMARY" ]; then args+=(--entry-summary "$KISTA_ENTRY_SUMMARY"); fi
-          if [ -n "$KISTA_ICON" ]; then args+=(--icon "caller/$KISTA_ICON"); fi
+          if [ "$KISTA_CATALOGUE" = true ]; then args=(--catalogue); else args=(--channel="$KISTA_CHANNEL"); fi
+          if [ -n "$KISTA_ENTRY_SUMMARY" ]; then args+=(--entry-summary="$KISTA_ENTRY_SUMMARY"); fi
+          if [ -n "$KISTA_ICON" ]; then
+            # the file itself, inside the calling repository's checkout (a link out of it is refused)
+            icon=$(realpath -e -- "caller/$KISTA_ICON") || { echo "::error::icon: no $KISTA_ICON in the calling repository"; exit 1; }
+            case "$icon" in
+              "$GITHUB_WORKSPACE/caller/"*) ;;
+              *) echo "::error::icon: $KISTA_ICON leads out of the calling repository"; exit 1;;
+            esac
+            [ -f "$icon" ] || { echo "::error::icon: $KISTA_ICON is not a file"; exit 1; }
+            args+=(--icon="$icon")
+          fi
           python3 extension-ci-tools/scripts/kista_publish.py --url "$KISTA_URL" --tenant "$KISTA_TENANT" \
-            "${args[@]}" --visibility "$KISTA_VISIBILITY" --name "$EXTENSION_NAME" \
+            "${args[@]}" --visibility "$KISTA_VISIBILITY" --name="$EXTENSION_NAME" \
             --postfix="$ARTIFACT_POSTFIX" --summary "$GITHUB_STEP_SUMMARY" artifacts

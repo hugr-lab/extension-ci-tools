@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import unicodedata
 import unittest
 import urllib.parse
 
@@ -25,10 +26,17 @@ import time  # noqa: E402
 
 
 class _Clock:
-    """The time module, with sleep recorded instead of slept."""
+    """The time module, with sleep recorded instead of slept, and the monotonic clock moved by it."""
 
     def __init__(self, sleep):
-        self.sleep = sleep
+        self.record, self.offset = sleep, 0
+
+    def sleep(self, seconds):
+        self.record(seconds)
+        self.offset += seconds
+
+    def monotonic(self):
+        return time.monotonic() + self.offset
 
     def __getattr__(self, name):
         return getattr(time, name)
@@ -54,6 +62,7 @@ class Fake(http.server.BaseHTTPRequestHandler):
     build = {}  # a catalogue publication's answer
     meta = None  # the catalogue entry's metadata (kista's answer); None: no entry (404)
     puts = []  # the metadata writes' bodies, decoded
+    detail = ""  # a problem's detail (else the fake's own)
 
     def answer(self, default, body):
         status = Fake.answers.pop(0) if Fake.answers else default
@@ -65,7 +74,7 @@ class Fake(http.server.BaseHTTPRequestHandler):
             self.send_header("Location", "http://127.0.0.2:9/elsewhere")
         self.end_headers()
         if kind:
-            body = {"type": "urn:kista:problem:" + kind, "status": status, "detail": "the fake's " + kind}
+            body = {"type": "urn:kista:problem:" + kind, "status": status, "detail": Fake.detail or "the fake's " + kind}
         elif status >= 300:
             body = {"error": "status %d" % status}
         self.wfile.write(json.dumps(body).encode())
@@ -97,6 +106,13 @@ class Fake(http.server.BaseHTTPRequestHandler):
         _, body = self.record("PUT")
         want = json.loads(body)
         Fake.puts.append((want, self.headers["Content-Type"]))
+        # as kista: the summary stored trimmed and NFC, at most 160 code points; an icon is a PNG
+        if want.get("summary") is not None:
+            want["summary"] = unicodedata.normalize("NFC", want["summary"].strip())
+        icon = want.get("icon")
+        if want.get("summary") and len(want["summary"]) > 160 or \
+                icon and "data" in icon and not base64.b64decode(icon["data"]).startswith(b"\x89PNG"):
+            Fake.answers.insert(0, (400, "invalid"))
         if self.answer(200, {}) == 200:
             icon = want.get("icon")
             if icon and "data" in icon:
@@ -135,7 +151,7 @@ class Test(unittest.TestCase):
 
     def setUp(self):
         Fake.answers, Fake.requests, Fake.bodies, Fake.signed, Fake.retry_after = [], [], [], [], "0"
-        Fake.build, Fake.meta, Fake.puts = {"state": "available"}, {"summary": None, "icon": None}, []
+        Fake.build, Fake.meta, Fake.puts, Fake.detail = {"state": "available"}, {"summary": None, "icon": None}, [], ""
         Fake.whoami = {"tenant": "acme", "provider": "key", "grants": [{"principal": "publisher:ci", "verbs": ["publish"], "channel": "prod"}]}
         self.sleeps = []
         self.dir = tempfile.mkdtemp()
@@ -247,7 +263,8 @@ class Test(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(self.sleeps, [2, 4, 8])
         self.assertIn("failed", summary)
-        self.assertIn("--check tests the key and its grant, and a publisher with a hold publishes with --catalogue", summary)
+        self.assertIn("--check tests the key and its grant, a publisher with a hold publishes with --catalogue, or the file is "
+                      "over kista's size limit (413)", summary)
 
     def test_redirect_refused(self):
         p = os.path.join(self.dir, "myext.duckdb_extension")
@@ -464,10 +481,11 @@ class Test(unittest.TestCase):
         self.assertEqual(self.run_main(p)[0], 0)
         self.assertEqual(len(Fake.requests), 4)
 
-    def icon(self, size=600):
-        """A fake icon: PNG's signature and bytes (kista checks the rest, the fake does not)."""
-        path = os.path.join(self.dir, "icon.png")
-        data = b"\x89PNG\r\n\x1a\n" + os.urandom(size)
+    def icon(self, size=600, width=64, height=64, name="icon.png"):
+        """A fake icon: PNG's signature, an IHDR of the size, and bytes (kista checks the rest, the fake
+        does not)."""
+        path = os.path.join(self.dir, name)
+        data = b"\x89PNG\r\n\x1a\n" + b"\0\0\0\x0dIHDR" + width.to_bytes(4, "big") + height.to_bytes(4, "big") + os.urandom(size)
         with open(path, "wb") as f:
             f.write(data)
         return path, data
@@ -496,10 +514,15 @@ class Test(unittest.TestCase):
     def test_held_on_a_channel(self):
         p = os.path.join(self.dir, "myext.duckdb_extension")
         extension(p)
+        # kista's two causes, told apart by its text: the publisher has a hold, or the build is held
+        Fake.detail = "the publisher has a hold (24h): it publishes into the catalogue"
         Fake.answers = [(409, "held")]
         code, summary = self.run_main(p)
         self.assertEqual((code, len(Fake.requests)), (1, 1))
         self.assertIn("publishes into the catalogue only (--catalogue)", summary)
+        Fake.detail, Fake.answers = "myext 1.2.0 linux_amd64 is held until 2026-10-31T10:00:00Z", [(409, "held")]
+        code, summary = self.run_main(p)
+        self.assertIn("this build is held (or revoked) in the catalogue", summary)
 
     def test_stops_without_room(self):
         # a 429 typed catalogue-full or tenant-limit is not retried, and nothing more is sent
@@ -565,12 +588,11 @@ class Test(unittest.TestCase):
         extension(p)
         Fake.whoami = {"publishers": [{"publisher": "ci", "id": "p1"}]}
         # stale: read again and write once the clock passes the entry's signed_at; conflict: read again
-        # POST, whoami, the read, a stale write; the read for its signed_at, the read, a conflicting
-        # write; the read, the write
-        Fake.answers = [201, 200, 200, (409, "stale"), 200, 200, (409, "conflict"), 200, 200]
+        # POST, whoami, the read, a stale write; the read, a conflicting write; the read, the write
+        Fake.answers = [201, 200, 200, (409, "stale"), 200, (409, "conflict"), 200, 200]
         code, summary = self.run_main(p, where=("--catalogue",), extra=["--entry-summary", "Geo"])
         self.assertEqual(code, 0, summary)
-        self.assertEqual([m for m, *_ in Fake.signed], ["POST", "GET", "GET", "PUT", "GET", "GET", "PUT", "GET", "PUT"])
+        self.assertEqual([m for m, *_ in Fake.signed], ["POST", "GET", "GET", "PUT", "GET", "PUT", "GET", "PUT"])
         self.assertEqual(self.sleeps, [1])
         # a full catalogue or tenant stops; a metadata write's rate is waited for
         for kind in ["catalogue-full", "tenant-limit"]:
@@ -602,8 +624,14 @@ class Test(unittest.TestCase):
         not_png = os.path.join(self.dir, "icon.svg")
         with open(not_png, "w") as f:
             f.write("<svg/>")
-        big, _ = self.icon(256 * 1024)
-        for path, says in [(not_png, "the icon is a PNG"), (big, "at most 256 KiB"), (os.path.join(self.dir, "none.png"), "none.png")]:
+        big, _ = self.icon(256 * 1024, name="big.png")
+        oblong, _ = self.icon(width=64, height=128, name="oblong.png")
+        tiny, _ = self.icon(width=32, height=32, name="tiny.png")
+        link = os.path.join(self.dir, "link.png")
+        os.symlink(self.icon(name="real.png")[0], link)
+        for path, says in [(not_png, "the icon is a PNG"), (big, "at most 256 KiB"), (oblong, "square, 64 to 512 pixels a side (this "
+                           "one is 64x128)"), (tiny, "this one is 32x32"), (link, "symbolic link"),
+                           (os.path.join(self.dir, "none.png"), "none.png")]:
             err = io.StringIO()
             with contextlib.redirect_stderr(err):
                 self.assertEqual(self.run_main(p, where=("--catalogue",), extra=["--icon", path])[0], 1)
@@ -624,10 +652,114 @@ class Test(unittest.TestCase):
 
     def test_ahead(self):
         now = kista_publish.datetime.datetime(2026, 10, 30, 10, 0, 0, tzinfo=kista_publish.datetime.timezone.utc)
+        # kista's RFC 3339 with nanoseconds, rounded up
         self.assertEqual(kista_publish.ahead("2026-10-30T10:00:05.123456789Z", now), 6)
+        self.assertEqual(kista_publish.ahead("2026-10-30T10:00:05Z", now), 5)
+        self.assertEqual(kista_publish.ahead("2026-10-30T12:00:00.5+02:00", now), 1)
         self.assertEqual(kista_publish.ahead("2026-10-30T09:59:00Z", now), 0)
         self.assertEqual(kista_publish.ahead(None, now), 0)
         self.assertEqual(kista_publish.ahead("soon", now), 0)
+
+    def test_summary_checked_and_normalised(self):
+        p = os.path.join(self.dir, "myext.duckdb_extension")
+        extension(p)
+        # a bad summary is refused before anything is published
+        for value, says in [("line\nbreak", "plain text on one line"), ("x" * 161, "at most 160 characters"),
+                            ("x" + "\u0301" * 5, "more than 4 combining marks"), ("\u3164", "invisible filler"),
+                            ("a\u200bb", "control, format or separator")]:
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(self.run_main(p, where=("--catalogue",), extra=["--entry-summary", value])[0], 1, value)
+            self.assertIn(says, err.getvalue())
+        self.assertEqual(Fake.requests, [])
+        # sent as kista stores it (trimmed, NFC); the same text in another form is no change
+        Fake.build = {"state": "available", "publisher_id": "p1"}
+        code, _ = self.run_main(p, where=("--catalogue",), extra=["--entry-summary", "  Cafe\u0301 tools "])
+        self.assertEqual((code, Fake.puts[-1][0]["summary"]), (0, "Caf\u00e9 tools"))
+        Fake.puts = []
+        code, summary = self.run_main(p, where=("--catalogue",), extra=["--entry-summary", "Cafe\u0301 tools"])
+        self.assertEqual((code, Fake.puts), (0, []))
+        self.assertIn("summary: unchanged", summary)
+        # kista refuses what the script let through: named, the build published
+        Fake.answers = [201, 200, (400, "invalid")]
+        code, summary = self.run_main(p, where=("--catalogue",), extra=["--entry-summary", "Other"])
+        self.assertEqual(code, 1)
+        self.assertIn("metadata: kista answered 400", summary)
+
+    def test_metadata_source(self):
+        p = os.path.join(self.dir, "myext.duckdb_extension")
+        extension(p)
+        # the publisher a catalogue publication's answer names: no whoami
+        Fake.build = {"state": "available", "publisher_id": "p9"}
+        self.assertEqual(self.run_main(p, where=("--catalogue",), extra=["--entry-summary", "Geo"])[0], 0)
+        self.assertEqual([path for path, *_ in Fake.requests][1:],
+                         ["/api/v1/tenants/acme/catalogue/publisher-id:p9/extensions/myext/meta"] * 2)
+        # a channel's publication: whoami's, retried when kista is busy
+        Fake.requests, Fake.whoami = [], {"publishers": [{"id": "p1"}]}
+        Fake.answers, Fake.retry_after = [201, (429, "rate-limited"), 503, 200], "4"
+        self.sleeps[:] = []
+        self.assertEqual(self.run_main(p, extra=["--entry-summary", "Geo2"])[0], 0)
+        self.assertEqual([path for path, *_ in Fake.requests][1:4], ["/api/v1/tenants/acme/whoami"] * 3)
+        self.assertEqual(self.sleeps, [4, 4])
+        self.assertIn("publisher-id:p1", Fake.requests[-1][0])
+
+    def test_stale_bounded_by_time(self):
+        p = os.path.join(self.dir, "myext.duckdb_extension")
+        extension(p)
+        Fake.build = {"publisher_id": "p1"}
+        # another writer's clock is 100 s ahead: kista takes a signed request for five minutes, so the
+        # script waits for it up to then, and names both clocks when it gives up
+        ahead = (kista_publish.datetime.datetime.now(kista_publish.datetime.timezone.utc)
+                 + kista_publish.datetime.timedelta(seconds=100)).strftime("%Y-%m-%dT%H:%M:%S.5Z")
+        Fake.meta = {"summary": None, "icon": None, "signed_at": ahead}
+        Fake.answers = [201] + [200, (409, "stale")] * 5
+        code, summary = self.run_main(p, where=("--catalogue",), extra=["--entry-summary", "Geo"])
+        self.assertEqual(code, 1)
+        self.assertEqual(len(self.sleeps), 3)
+        self.assertTrue(all(99 <= w <= 102 for w in self.sleeps), self.sleeps)
+        self.assertIn("signed at " + ahead + " and this clock says", summary)
+        # a write of the same second again and again: a second each, at most STALE_TRIES tries
+        Fake.meta = {"summary": None, "icon": None, "signed_at": "2026-01-01T00:00:00Z"}
+        Fake.answers, self.sleeps[:] = [201] + [200, (409, "stale")] * 30, []
+        self.assertEqual(self.run_main(p, where=("--catalogue",), extra=["--entry-summary", "Geo"])[0], 1)
+        self.assertEqual(self.sleeps, [1] * kista_publish.STALE_TRIES)
+
+    def test_check_names_the_extension(self):
+        os.environ["KISTA_PUBLISHER_KEY"] = self.key
+
+        def check(grants, *extra):
+            Fake.whoami = {"publishers": [{"id": "p1"}], "grants": grants}
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                return kista_publish.main(["--url", self.url, "--tenant", "acme", "--catalogue", "--name", "myext", "--check", *extra])
+        self.assertEqual(check([{"verbs": ["publish"], "extension": "myext"}]), 0)
+        self.assertEqual(check([{"verbs": ["publish"], "extension_group": "ours"}]), 0)  # its members are not shown
+        self.assertEqual(check([{"verbs": ["publish"], "extension": "other"}]), 1)
+        self.assertEqual(check([{"verbs": ["publish"], "package_type": "adbc_driver"}]), 1)
+
+    def test_one_entry_without_name(self):
+        for n in ["one", "two"]:
+            extension(os.path.join(self.dir, n + ".duckdb_extension"))
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(self.run_main(self.dir, where=("--catalogue",), extra=["--icon", self.icon()[0]])[0], 1)
+        self.assertIn("give --name (found one, two)", err.getvalue())
+        self.assertEqual(Fake.requests, [])
+        # with --name, its own entry
+        Fake.whoami = {"publishers": [{"id": "p1"}]}
+        self.assertEqual(self.run_main(self.dir, where=("--catalogue",), extra=["--name", "one", "--entry-summary", "One"])[0], 0)
+
+    def test_stop_rows_name_each_build(self):
+        # a build published, then the catalogue full: every row names its build's version and platform
+        for arch in ["linux_amd64", "linux_arm64", "osx_arm64"]:
+            d = os.path.join(self.dir, "myext-v2.0.0-extension-" + arch)
+            os.makedirs(d)
+            extension(os.path.join(d, "myext.duckdb_extension"), arch)
+        Fake.answers = [201, (429, "catalogue-full")]
+        code, summary = self.run_main(self.dir, where=("--catalogue",))
+        self.assertEqual((code, len(Fake.requests)), (1, 2))
+        self.assertIn("| myext | 1.2.0 | linux_amd64 | published |", summary)
+        self.assertIn("| myext | 1.2.0 | linux_arm64 | failed: myext 1.2.0 linux_arm64: kista answered 429 (catalogue-full)", summary)
+        self.assertIn("| myext | 1.2.0 | osx_arm64 | not sent: kista has no room", summary)
 
     def test_dry_run_catalogue(self):
         p = os.path.join(self.dir, "myext.duckdb_extension")

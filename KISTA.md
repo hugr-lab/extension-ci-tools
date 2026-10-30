@@ -127,21 +127,28 @@ jobs:
 the tenant's catalogue only, placed in no channel: the channels take them by their rules, or an
 administrator places them. A publisher with a hold must publish so (a channel answers it `409`
 `held`), and its builds are held until their time; the summary shows until when. The publisher
-needs `publish` on the extension tenant-wide, which `--check` tests:
+needs a `publish` grant without a channel: on the extension, on an extension group holding it, or
+on every name, and of no other package type:
 
 ```text
 kista admin grant add <tenant> -principal publisher:<publisher> -verb publish -extension myext
 ```
 
-(no `-channel`), unless it is a distributor's publisher, which needs no grant.
+The job's first step tests it (`--check --catalogue --name myext`), unless the publisher is a
+distributor's, which needs no grant.
 
-**The entry's summary and icon** (kista spec 0036). `entry_summary` and `icon` (a path in the
-calling repository, checked out for this alone) set the catalogue entry's metadata once its builds
-are published, with a channel's publication too. The entry's metadata is read and merged: an input
-left empty keeps what kista has, and an icon kista has already is kept by its hash, not sent again;
-nothing is written when nothing changes. The icon is a square PNG of 64 to 512 pixels, at most
-256 KiB, without text, Exif or colour-profile chunks (`oxipng --strip all icon.png` strips them);
-kista names the rule it breaks.
+**The entry's summary and icon** (kista spec 0036). `entry_summary` and `icon` set the catalogue
+entry's metadata once its builds are published, with a channel's publication too. The entry's
+metadata is read and merged: an input left empty keeps what kista has, and an icon kista has already
+is kept by its hash, not sent again; nothing is written when nothing changes (a summary is compared
+as kista stores it: trimmed, NFC).
+- Both are checked before anything is published, so a bad value never leaves builds published and
+  the job failed. The summary is plain text on one line, at most 160 characters. The icon is a
+  square PNG of 64 to 512 pixels, at most 256 KiB, without text, Exif or colour-profile chunks
+  (`oxipng --strip all icon.png` strips them); kista checks its chunks and names the rule it breaks.
+- `icon` is a file's path in the calling repository, as written: no `..`, no pattern characters
+  (`*?[]!#\`), no line ends. That file alone is checked out (with Git LFS), and it must stay inside
+  the checkout: a link out of it is refused.
 
 **The publisher key** (kista spec 0023). Each request is signed with the publisher's SSH key, like
 an SSH key on GitHub: kista holds only the public half. Once, for a repository:
@@ -166,8 +173,9 @@ gh variable set KISTA_URL --body <kista URL>; gh variable set KISTA_TENANT --bod
 rm publisher_key
 ```
 
-`--check` signs a `whoami`: it fails on a key kista does not know, and, with `--channel`, on a
-publisher without a `publish` grant there. To replace the key, register the new one, replace the
+`--check` signs a `whoami`: it fails on a key kista does not know, and, with `--channel` or
+`--catalogue`, on a publisher without a `publish` grant there (with `--name`, one reaching that
+extension). To replace the key, register the new one, replace the
 secret, and remove the old one in kista (`kista admin publisher key list|remove`).
 
 For a licensed extension whose keys kista should record, a server administrator marks the publisher
@@ -204,7 +212,8 @@ python3 extension-ci-tools/scripts/kista_publish.py --url https://kista.example.
 ```
 
 `--dry-run` prints the statements it would sign and the key's fingerprint, and sends nothing.
-`--entry-summary ''` or `--icon ''` clears that field.
+`--entry-summary ''` or `--icon ''` clears that field. They set one extension's entry: with files of
+several extensions, give `--name`.
 
 ## Upstream
 
