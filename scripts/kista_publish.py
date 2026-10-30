@@ -1,20 +1,30 @@
 #!/usr/bin/env python3
-"""Publishes built DuckDB extensions to a kista channel (kista specs 0022 and 0023).
+"""Publishes built DuckDB extensions to a kista channel or catalogue (kista specs 0022, 0023, 0033, 0036).
 
-    kista_publish.py --url <kista> --tenant <t> --channel <c> [--visibility private|public]
+    kista_publish.py --url <kista> --tenant <t> (--channel <c> | --catalogue) [--visibility private|public]
                      [--name <extension>] [--postfix <artifact postfix>] [--key-env KISTA_PUBLISHER_KEY]
-                     [--summary <file>] [--dry-run] <file or directory>...
-    kista_publish.py --url <kista> --tenant <t> --check
+                     [--entry-summary <text>] [--icon <png>] [--summary <file>] [--dry-run] <file or directory>...
+    kista_publish.py --url <kista> --tenant <t> [--channel <c> | --catalogue] --check
 
 Each .duckdb_extension found is read for its footer (DuckDB's metadata block: the extension version
-and platform) and posted, as built, to kista's publication route:
+and platform) and posted, as built, to kista's publication route, a channel's:
 
     POST <kista>/api/v1/tenants/<t>/channels/<c>/extensions/<name>/releases?version=…&platform=…
 
-kista checks the build and signs it with the channel's key. wasm builds are skipped: kista refuses
-them (its spec 0008). With --name, only that extension's files are taken; with --postfix (as the
-distribution's artifact_postfix, empty by default), only those of artifact directories that end in
--extension-<arch><postfix>.
+kista checks the build and signs it with the channel's key. With --catalogue, it goes into the
+tenant's catalogue only, placed in no channel, for the channels' rules to take (kista spec 0033): a
+publisher with a hold publishes so, and its builds are held until their time.
+
+    POST <kista>/api/v1/tenants/<t>/catalogue/extensions/<name>/builds?version=…&platform=…
+
+wasm builds are skipped: kista refuses them (its spec 0008). With --name, only that extension's
+files are taken; with --postfix (as the distribution's artifact_postfix, empty by default), only
+those of artifact directories that end in -extension-<arch><postfix>.
+
+--entry-summary and --icon set the catalogue entry's summary and icon (a square PNG, kista spec
+0036), once for each extension published, after its builds: the entry's metadata is read and merged
+(what is not given is kept; an icon kista has already is kept by its hash, not sent again), and
+written only when it changes. An empty value clears that field.
 
 Each request is signed with the publisher's SSH key (kista spec 0023), from the environment variable
 --key-env names: the private key itself, its base64, or a file holding it. The key is written to a
@@ -25,7 +35,9 @@ ssh-keygen then fails), removed at the end, and never printed. The request carri
 the key and its grants; --dry-run prints the statements and the key's fingerprint, sending nothing.
 
 The URL must be https (http only to a loopback address), and redirects are refused. 201 is published
-and 200 already published with the same body; 429, 408, 5xx and a broken connection are retried;
+and 200 already published with the same body; 408, 5xx, a broken connection and a 429 for a busy
+kista are retried (rate-limited, upload-slots, ingest-busy: after its Retry-After); a 429 typed
+catalogue-full or tenant-limit stops the run, since it clears only when room is made in kista;
 anything else fails.
 
 Standard library and OpenSSH 8.1 or later only: it runs in any CI.
@@ -61,10 +73,28 @@ TIMEOUT = 300
 MAX_RETRY_AFTER = 60
 SUFFIXES = (".duckdb_extension", ".duckdb_extension.wasm")
 NAMESPACE = "kista-request@v1"
+PROBLEM = "urn:kista:problem:"
+# a 429 of these types clears only when room is made in kista: a client stops (kista specs 0033, 0038)
+STOP_TYPES = ("catalogue-full", "tenant-limit")
+PNG = b"\x89PNG\r\n\x1a\n"
+MAX_ICON = 256 * 1024
 
 
 class Refused(Exception):
     """A file this script will not publish, or kista refused."""
+
+
+class Stopped(Refused):
+    """kista has no room (catalogue-full, tenant-limit): nothing more is sent."""
+
+
+def problem_type(text):
+    """The type of a kista problem answer (urn:kista:problem:<type>), "" for anything else."""
+    try:
+        t = json.loads(text).get("type") or ""
+    except (ValueError, AttributeError):
+        return ""
+    return t[len(PROBLEM):] if isinstance(t, str) and t.startswith(PROBLEM) else ""
 
 
 def footer(path):
@@ -249,18 +279,44 @@ def signed_headers(signer, method, url, body):
 
 
 def release_url(base, tenant, channel, visibility, path):
+    """The publication's URL: a channel's (channel given), or the catalogue's (channel None)."""
     name, version, platform = footer(path)
     q = urllib.parse.urlencode({"version": version, "platform": platform, "visibility": visibility})
+    if channel is None:
+        return f"{base}/api/v1/tenants/{seg(tenant)}/catalogue/extensions/{seg(name)}/builds?{q}"
     return (f"{base}/api/v1/tenants/{seg(tenant)}/channels/{seg(channel)}/extensions/{seg(name)}/releases?{q}")
 
 
-def seg(x):
+def meta_url(base, tenant, source, name):
+    """A catalogue entry's metadata (kista spec 0036); the source keeps its ":" as kista names it."""
+    return f"{base}/api/v1/tenants/{seg(tenant)}/catalogue/{seg(source, ':')}/extensions/{seg(name)}/meta"
+
+
+def seg(x, safe=""):
     """One path segment: a "/" in it stays in it."""
-    return urllib.parse.quote(x, safe="")
+    return urllib.parse.quote(x, safe=safe)
+
+
+def wait_for(headers, attempt):
+    """How long to wait before a retry: the answer's Retry-After (at most MAX_RETRY_AFTER), else a backoff."""
+    wait = headers.get("Retry-After") if headers else None
+    return min(int(wait), MAX_RETRY_AFTER) if wait and wait.isdigit() else 2 ** (attempt + 1)
+
+
+def held_note(text):
+    """A catalogue build's answer: " (held until <time>)" for a held build, "" otherwise."""
+    try:
+        b = json.loads(text)
+    except ValueError:
+        return ""
+    if isinstance(b, dict) and b.get("state") == "held":
+        return " (held until %s)" % (b.get("available_at") or "its hold ends")
+    return ""
 
 
 def publish(base, tenant, channel, visibility, signer, path, sleep=None):
-    """Posts one file; returns 'published' or 'already published', raises Refused otherwise."""
+    """Posts one file, to a channel or (channel None) the catalogue; returns 'published' or 'already
+    published' (a held catalogue build says until when), raises Refused (Stopped: no room) otherwise."""
     sleep = sleep or time.sleep
     name, version, platform = footer(path)
     url = release_url(base, tenant, channel, visibility, path)
@@ -273,20 +329,25 @@ def publish(base, tenant, channel, visibility, signer, path, sleep=None):
         req = urllib.request.Request(url, data=body, method="POST", headers=headers)
         try:
             with OPENER.open(req, timeout=TIMEOUT) as r:
-                if r.status == 201:
-                    return "published"
-                if r.status == 200:
-                    return "already published"
+                if r.status in (200, 201):
+                    note = held_note(r.read(100000).decode("utf-8", "replace")) if channel is None else ""
+                    return ("published" if r.status == 201 else "already published") + note
                 raise Refused(f"{name} {version} {platform}: kista answered {r.status}")
         except urllib.error.HTTPError as e:
             if 300 <= e.code < 400:
                 raise Refused(f"{name} {version} {platform}: kista answered {e.code} ({e.reason}): give the URL kista "
                               "is served at, without redirects")
-            text = (e.read(2000) if e.fp else b"").decode("utf-8", "replace").strip() or str(e.reason)
+            with e:
+                text = (e.read(2000) if e.fp else b"").decode("utf-8", "replace").strip() or str(e.reason)
+            kind = problem_type(text)
+            if e.code == 429 and kind in STOP_TYPES:
+                raise Stopped(f"{name} {version} {platform}: kista answered 429 ({kind}): {text}")
             if (e.code in (408, 429) or e.code >= 500) and attempt < RETRIES:
-                wait = e.headers.get("Retry-After") if e.headers else None
-                sleep(min(int(wait), MAX_RETRY_AFTER) if wait and wait.isdigit() else 2 ** (attempt + 1))
+                sleep(wait_for(e.headers, attempt))
                 continue
+            if e.code == 409 and kind == "held" and channel is not None:
+                raise Refused(f"{name} {version} {platform}: kista answered 409 (held): the publisher has a hold, so it "
+                              f"publishes into the catalogue only (--catalogue): {text}")
             raise Refused(f"{name} {version} {platform}: kista answered {e.code}: {text}")
         except http.client.InvalidURL as e:
             raise Refused(f"{name} {version} {platform}: {e}")
@@ -295,58 +356,201 @@ def publish(base, tenant, channel, visibility, signer, path, sleep=None):
             if attempt < RETRIES:
                 sleep(2 ** (attempt + 1))
                 continue
-            raise Refused(f"{name} {version} {platform}: {getattr(e, 'reason', e)}")
+            # kista answers some refusals before it reads the file (a key it does not know, no grant,
+            # a publisher with a hold on a channel), and closes: a large upload then sees only the close
+            raise Refused(f"{name} {version} {platform}: no answer ({getattr(e, 'reason', e)}); kista may have refused it "
+                          "before reading the file: --check tests the key and its grant"
+                          + ("" if channel is None else ", and a publisher with a hold publishes with --catalogue"))
     raise Refused(f"{name} {version} {platform}: no answer")
 
 
-def check(base, tenant, signer, channel=None):
-    """A signed whoami: the key, its publisher and its grants, as kista sees them. With a channel, a
-    publish grant there (or tenant-wide) is required too."""
+def whoami(base, tenant, signer):
+    """A signed whoami: the key, its publishers and their grants, as kista sees them (its text)."""
     url = f"{base}/api/v1/tenants/{seg(tenant)}/whoami"
     req = urllib.request.Request(url, method="GET", headers=signed_headers(signer, "GET", url, b""))
     try:
         with OPENER.open(req, timeout=60) as r:
-            text = r.read(100000).decode("utf-8", "replace")
+            return r.read(100000).decode("utf-8", "replace")
     except urllib.error.HTTPError as e:
         with e:
             body = (e.read(2000) if e.fp else b"").decode("utf-8", "replace").strip() or str(e.reason)
         raise Refused(f"whoami: kista answered {e.code}: {body}")
     except (OSError, http.client.HTTPException) as e:
         raise Refused(f"whoami: {getattr(e, 'reason', e)}")
-    if channel:
-        try:
-            grants = json.loads(text).get("grants") or []
-        except ValueError:
-            raise Refused("whoami: kista's answer is not JSON")
-        if not any("publish" in (g.get("verbs") or []) and g.get("channel") in (None, "", channel) for g in grants):
+
+
+def parsed(text):
+    try:
+        w = json.loads(text)
+    except ValueError:
+        w = None
+    if not isinstance(w, dict):
+        raise Refused("whoami: kista's answer is not a JSON object")
+    return w
+
+
+def check(base, tenant, signer, channel=None, catalogue=False):
+    """A signed whoami. With a channel, a publish grant there (or tenant-wide) is required too; with
+    catalogue, a tenant-wide publish grant, or a distributor's publisher (which needs none)."""
+    text = whoami(base, tenant, signer)
+    if channel or catalogue:
+        w = parsed(text)
+        grants = w.get("grants") or []
+        if channel and not any("publish" in (g.get("verbs") or []) and g.get("channel") in (None, "", channel) for g in grants):
             raise Refused(f"whoami: the publisher holds no publish grant in {channel}: {text}")
+        if catalogue and not (any("publish" in (g.get("verbs") or []) and not g.get("channel") for g in grants)
+                              or any(p.get("distributor") for p in w.get("publishers") or [])):
+            raise Refused(f"whoami: the publisher holds no tenant-wide publish grant, which the catalogue needs: {text}")
     return text
 
 
+def source_of(text):
+    """The catalogue source the key's builds land in, as kista names it: publisher-id:<id> of its
+    publisher (of the first by id, when the key is several publishers', as kista takes it)."""
+    ids = sorted(p.get("id") for p in parsed(text).get("publishers") or [] if p.get("id"))
+    if not ids:
+        raise Refused("whoami: the key names no publisher, so its catalogue entries cannot be named")
+    return "publisher-id:" + ids[0]
+
+
+def icon_of(path):
+    """An icon file's bytes: a PNG of at most 256 KiB (kista checks the rest: square, 64 to 512 pixels,
+    its chunks)."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read(MAX_ICON + 1)
+    except OSError as e:
+        raise Refused(f"{path}: {e.strerror}")
+    if not data.startswith(PNG):
+        raise Refused(f"{path}: the icon is a PNG")
+    if len(data) > MAX_ICON:
+        raise Refused(f"{path}: the icon is at most 256 KiB")
+    return data
+
+
+def signed_json(signer, method, url, payload):
+    """A signed JSON request (GET without a body); its answer as a dict. HTTPError is raised to the caller."""
+    body = b"" if payload is None else json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    headers = signed_headers(signer, method, url, body)
+    if payload is not None:
+        headers.update({"Content-Type": "application/json", "Content-Length": str(len(body))})
+    req = urllib.request.Request(url, data=body if payload is not None else None, method=method, headers=headers)
+    with OPENER.open(req, timeout=60) as r:
+        try:
+            return json.loads(r.read(1000000).decode("utf-8", "replace"))
+        except ValueError:
+            raise Refused(f"{method} {url}: kista's answer is not JSON")
+
+
+def ahead(signed_at, now=None):
+    """Whole seconds until our clock passes kista's signed_at (RFC 3339, UTC, to the second as a
+    statement's signed-at is), 0 when it has or it cannot be read."""
+    try:
+        t = datetime.datetime.strptime((signed_at or "")[:19], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=datetime.timezone.utc)
+    except ValueError:
+        return 0
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    return max(0, int((t - now).total_seconds()) + 1)
+
+
+def set_meta(base, tenant, source, name, signer, summary=None, icon=None, sleep=None):
+    """Sets a catalogue entry's summary and icon (kista spec 0036): reads the entry's metadata, merges
+    (None keeps a field, "" or b"" clears it; an icon kista has already is kept by its hash, not sent
+    again), and writes it when it changes. Returns 'set' or 'unchanged'; raises Refused otherwise."""
+    sleep = sleep or time.sleep
+    url = meta_url(base, tenant, source, name)
+    new_icon = None
+    if icon:
+        new_icon = {"content_type": "image/png", "data": base64.b64encode(icon).decode("ascii")}
+        icon_sha = hashlib.sha256(icon).hexdigest()
+    for attempt in range(RETRIES + 1):
+        try:
+            cur = signed_json(signer, "GET", url, None)
+            have_icon = (cur.get("icon") or {}).get("sha256")
+            want = {"summary": cur.get("summary") if summary is None else summary}
+            if icon is None:
+                want["icon"] = {"sha256": have_icon} if have_icon else None
+            elif not icon:
+                want["icon"] = None
+            else:
+                want["icon"] = {"sha256": have_icon} if have_icon == icon_sha else new_icon
+            if (want["summary"] or None) == (cur.get("summary") or None) and \
+                    (want["icon"] or {}).get("sha256") == have_icon and "data" not in (want["icon"] or {}):
+                return "unchanged"
+            signed_json(signer, "PUT", url, want)
+            return "set"
+        except urllib.error.HTTPError as e:
+            if 300 <= e.code < 400:
+                raise Refused(f"{name} metadata: kista answered {e.code} ({e.reason}): give the URL kista is served at, "
+                              "without redirects")
+            with e:
+                text = (e.read(2000) if e.fp else b"").decode("utf-8", "replace").strip() or str(e.reason)
+            kind = problem_type(text)
+            if e.code == 429 and kind in STOP_TYPES:
+                raise Stopped(f"{name} metadata: kista answered 429 ({kind}): {text}")
+            if e.code == 404:
+                raise Refused(f"{name} metadata: kista answered 404: no catalogue entry of {source} for {name} (its "
+                              f"builds are published first), or the key may not set it: {text}")
+            if attempt < RETRIES:
+                if e.code == 409 and kind == "stale":
+                    # a newer write, or another of the same second: write again once our clock passes
+                    # the entry's signed_at (read again: the loop's next read is the merge's)
+                    try:
+                        signed_at = signed_json(signer, "GET", url, None).get("signed_at")
+                    except (urllib.error.HTTPError, Refused, OSError, http.client.HTTPException):
+                        signed_at = None
+                    sleep(min(max(ahead(signed_at), 1), MAX_RETRY_AFTER))
+                    continue
+                if e.code == 409 and kind == "conflict":  # the icon changed meanwhile: read again
+                    continue
+                if e.code in (408, 429) or e.code >= 500:
+                    sleep(wait_for(e.headers, attempt))
+                    continue
+            raise Refused(f"{name} metadata: kista answered {e.code}: {text}")
+        except http.client.InvalidURL as e:
+            raise Refused(f"{name} metadata: {e}")
+        except (OSError, http.client.HTTPException) as e:
+            if attempt < RETRIES:
+                sleep(2 ** (attempt + 1))
+                continue
+            raise Refused(f"{name} metadata: {getattr(e, 'reason', e)}")
+    raise Refused(f"{name} metadata: no answer")
+
+
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="Publish built DuckDB extensions to a kista channel, signed with the publisher's key.")
+    ap = argparse.ArgumentParser(description="Publish built DuckDB extensions to a kista channel or catalogue, signed with the "
+                                             "publisher's key.")
     ap.add_argument("--url", required=True, help="the kista's public URL")
     ap.add_argument("--tenant", required=True)
-    ap.add_argument("--channel")
+    where = ap.add_mutually_exclusive_group()
+    where.add_argument("--channel", help="publish into this channel")
+    where.add_argument("--catalogue", action="store_true",
+                       help="publish into the tenant's catalogue only (a publisher with a hold publishes so)")
     ap.add_argument("--visibility", default="private", choices=["private", "public"])
     ap.add_argument("--name", help="only this extension's files")
     ap.add_argument("--postfix", help="only artifact directories ending -extension-<arch><postfix> (as artifact_postfix)")
     ap.add_argument("--key-env", default="KISTA_PUBLISHER_KEY",
                     help="the environment variable holding the publisher's private SSH key, its base64, or a file holding it")
+    ap.add_argument("--entry-summary", help="the catalogue entry's summary, set after its builds (empty: cleared)")
+    ap.add_argument("--icon", help="the catalogue entry's icon, a square PNG of 64 to 512 pixels, set after its builds "
+                                   "(empty: cleared)")
     ap.add_argument("--summary", help="a Markdown file to append the outcome to ($GITHUB_STEP_SUMMARY)")
     ap.add_argument("--check", action="store_true",
-                    help="sign a whoami: test the key, and with --channel its publish grant there; publish nothing")
+                    help="sign a whoami: test the key, and with --channel or --catalogue its publish grant; publish nothing")
     ap.add_argument("--dry-run", action="store_true", help="print the statements and the key's fingerprint, send nothing")
     ap.add_argument("paths", nargs="*")
     a = ap.parse_args(argv)
-    if not a.check and (not a.channel or not a.paths):
-        ap.error("--channel and at least one path are required, unless --check")
+    if not a.check and (not (a.channel or a.catalogue) or not a.paths):
+        ap.error("--channel or --catalogue, and at least one path, are required, unless --check")
     base = a.url.rstrip("/")
+    channel = None if a.catalogue else a.channel
+    meta = a.entry_summary is not None or a.icon is not None
     try:
         check_url(base)
         found = [] if a.check else files(a.paths, a.name, a.postfix)
         if not a.check and not found:
             raise Refused("no .duckdb_extension found")
+        icon = None if a.icon is None else (icon_of(a.icon) if a.icon else b"")
         # a cancelled CI job is sent SIGTERM: leave through finally, which removes the key's file
         signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
         signer = Signer(os.environ.get(a.key_env, ""), a.key_env)
@@ -356,35 +560,69 @@ def main(argv=None):
     try:
         if a.check:
             try:
-                print(check(base, a.tenant, signer, a.channel))
+                print(check(base, a.tenant, signer, a.channel, a.catalogue))
             except Refused as e:
                 print(e, file=sys.stderr)
                 return 1
             return 0
-        rows, failed = [], False
+        rows, failed, stopped, published = [], False, None, []
         for path in found:
+            if stopped:
+                rows.append((os.path.basename(path), "", "", "not sent: " + stopped))
+                continue
             if is_wasm(path):
                 rows.append((os.path.basename(path), "", "wasm", "skipped: kista does not take wasm builds yet"))
                 continue
             try:
                 name, version, platform = footer(path)
                 if a.dry_run:
-                    url = release_url(base, a.tenant, a.channel, a.visibility, path)
+                    url = release_url(base, a.tenant, channel, a.visibility, path)
                     with open(path, "rb") as f:
                         st = statement("POST", url, f.read())
                     print(st.decode("ascii"), end="")
                     rows.append((name, version, platform, "dry run: would be signed by " + signer.fingerprint))
+                    published.append(name)
                     continue
-                outcome = publish(base, a.tenant, a.channel, a.visibility, signer, path)
+                outcome = publish(base, a.tenant, channel, a.visibility, signer, path)
                 rows.append((name, version, platform, outcome))
+                published.append(name)
+            except Stopped as e:
+                failed, stopped = True, "kista has no room (catalogue-full or tenant-limit): make room, then run again"
+                rows.append((os.path.basename(path), "", "", f"failed: {e}"))
             except Refused as e:
                 failed = True
                 rows.append((os.path.basename(path), "", "", f"failed: {e}"))
+        if meta:
+            names = list(dict.fromkeys(extension_name(p) for p in found if not is_wasm(p)))
+            source = None
+            for name in names:
+                what = "summary and icon" if a.entry_summary is not None and a.icon is not None else \
+                    "summary" if a.entry_summary is not None else "icon"
+                if stopped:
+                    rows.append((name, "", "metadata", "not sent: " + stopped))
+                    continue
+                if name not in published:
+                    rows.append((name, "", "metadata", f"not set: no build of {name} was published"))
+                    continue
+                if a.dry_run:
+                    rows.append((name, "", "metadata", f"dry run: its {what} would be read, merged and written"))
+                    continue
+                try:
+                    source = source or source_of(whoami(base, a.tenant, signer))
+                    outcome = set_meta(base, a.tenant, source, name, signer, a.entry_summary, icon)
+                    rows.append((name, "", "metadata", f"{what}: {outcome}"))
+                except Stopped as e:
+                    failed, stopped = True, "kista has no room (catalogue-full or tenant-limit): make room, then run again"
+                    rows.append((name, "", "metadata", f"failed: {e}"))
+                except Refused as e:
+                    failed = True
+                    rows.append((name, "", "metadata", f"failed: {e}"))
         for r in rows:
             print("\t".join(r))
         if a.summary:
+            where = f"{a.tenant}/{channel}" if channel else f"{a.tenant} catalogue"
             with open(a.summary, "a") as f:
-                f.write(f"### kista: {base} {a.tenant}/{a.channel}\n\n| extension | version | platform | outcome |\n| --- | --- | --- | --- |\n")
+                f.write(f"### kista: {base} {where}\n\n| extension | version | platform | outcome |\n| --- | --- | --- | --- |\n")
                 for r in rows:
                     f.write("| " + " | ".join(x.replace("|", "\\|") for x in r) + " |\n")
         return 1 if failed else 0

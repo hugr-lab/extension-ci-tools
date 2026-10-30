@@ -1,5 +1,5 @@
-# Publishes a distribution build's artifacts to a kista channel (hugr-lab's fork; kista specs 0022
-# and 0023). Call it after _extension_distribution.yml (DuckDB's or this fork's):
+# Publishes a distribution build's artifacts to a kista channel or catalogue (hugr-lab's fork; kista
+# specs 0022, 0023, 0033 and 0036). Call it after _extension_distribution.yml (DuckDB's or this fork's):
 #
 #   kista:
 #     needs: build
@@ -7,13 +7,18 @@
 #     uses: hugr-lab/extension-ci-tools/.github/workflows/_kista_publish.yml@<commit>
 #     with: {extension_name: myext, ci_tools_version: <the same commit>, kista_url: '${{ vars.KISTA_URL }}',
 #            tenant: '${{ vars.KISTA_TENANT }}', channel: '${{ vars.KISTA_CHANNEL }}', environment: release}
+#            # or, into the catalogue: catalogue: true (no channel), and optionally
+#            # entry_summary: 'Geometry tools', icon: docs/icon.png
 #     secrets: {KISTA_PUBLISHER_KEY: '${{ secrets.KISTA_PUBLISHER_KEY }}'}
 #
 # Each request is signed with the publisher's SSH key, whose public half is registered on the
 # publisher in kista (kista admin publisher key add). Each built file goes to kista as it is; kista
-# checks it and signs it with the channel's key. wasm builds are skipped while kista does not take
-# them. Keep the key an environment secret behind the environment's protection rules (reviewers,
-# which tags), and name the environment here: a job that calls a workflow cannot set one.
+# checks it and signs it with the channel's key. With catalogue: true instead of a channel, the builds
+# go into the tenant's catalogue only, for the channels' rules to take: a publisher with a hold
+# publishes so. entry_summary and icon (a PNG in the calling repository) set the catalogue entry's
+# summary and icon after its builds. wasm builds are skipped while kista does not take them. Keep the
+# key an environment secret behind the environment's protection rules (reviewers, which tags), and
+# name the environment here: a job that calls a workflow cannot set one.
 name: Publish to kista
 on:
   workflow_call:
@@ -29,8 +34,25 @@ on:
         required: true
         type: string
       channel:
-        required: true
+        description: the channel to publish into; or catalogue
+        required: false
         type: string
+        default: ""
+      catalogue:
+        description: publish into the tenant's catalogue only, not a channel (a publisher with a hold publishes so)
+        required: false
+        type: boolean
+        default: false
+      entry_summary:
+        description: the catalogue entry's summary, set after its builds; empty leaves it as it is
+        required: false
+        type: string
+        default: ""
+      icon:
+        description: the catalogue entry's icon, a square PNG of 64 to 512 pixels at a path of the calling repository; empty leaves it as it is
+        required: false
+        type: string
+        default: ""
       visibility:
         description: private (kista's default) or public
         required: false
@@ -60,7 +82,7 @@ permissions:
 
 jobs:
   publish:
-    name: kista ${{ inputs.tenant }}/${{ inputs.channel }}
+    name: kista ${{ inputs.tenant }}/${{ inputs.catalogue && 'catalogue' || inputs.channel }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: ${{ inputs.environment }}
@@ -74,24 +96,42 @@ jobs:
           path: extension-ci-tools
           persist-credentials: false
 
+      - name: The icon's file, from the calling repository
+        if: inputs.icon != ''
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          path: caller
+          persist-credentials: false
+          sparse-checkout: ${{ inputs.icon }}
+          sparse-checkout-cone-mode: false
+
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           pattern: ${{ inputs.extension_name }}-*-extension-*${{ inputs.artifact_postfix }}
           path: artifacts
 
-      - name: Check the key
+      - name: Check the inputs and the key
         env:
           KISTA_PUBLISHER_KEY: ${{ secrets.KISTA_PUBLISHER_KEY }}
           KISTA_URL: ${{ inputs.kista_url }}
           KISTA_TENANT: ${{ inputs.tenant }}
           KISTA_CHANNEL: ${{ inputs.channel }}
+          KISTA_CATALOGUE: ${{ inputs.catalogue }}
+          KISTA_ICON: ${{ inputs.icon }}
           KISTA_ENVIRONMENT: ${{ inputs.environment }}
         run: |
+          if { [ "$KISTA_CATALOGUE" = true ] && [ -n "$KISTA_CHANNEL" ]; } || { [ "$KISTA_CATALOGUE" != true ] && [ -z "$KISTA_CHANNEL" ]; }; then
+            echo "::error::give a channel, or catalogue: true (one of the two)"; exit 1
+          fi
+          case "$KISTA_ICON" in
+            /*|..|../*|*/..|*/../*) echo "::error::icon is a path inside the calling repository"; exit 1;;
+          esac
           if [ -z "$KISTA_ENVIRONMENT" ]; then
             echo "::warning::no environment: any workflow of this repository that can read the KISTA_PUBLISHER_KEY secret can publish; keep it an environment's secret behind protection rules"
           fi
+          if [ "$KISTA_CATALOGUE" = true ]; then where=(--catalogue); else where=(--channel "$KISTA_CHANNEL"); fi
           python3 extension-ci-tools/scripts/kista_publish.py --url "$KISTA_URL" --tenant "$KISTA_TENANT" \
-            --channel "$KISTA_CHANNEL" --check >/dev/null
+            "${where[@]}" --check >/dev/null
 
       - name: Publish
         env:
@@ -99,10 +139,16 @@ jobs:
           KISTA_URL: ${{ inputs.kista_url }}
           KISTA_TENANT: ${{ inputs.tenant }}
           KISTA_CHANNEL: ${{ inputs.channel }}
+          KISTA_CATALOGUE: ${{ inputs.catalogue }}
           KISTA_VISIBILITY: ${{ inputs.visibility }}
+          KISTA_ENTRY_SUMMARY: ${{ inputs.entry_summary }}
+          KISTA_ICON: ${{ inputs.icon }}
           EXTENSION_NAME: ${{ inputs.extension_name }}
           ARTIFACT_POSTFIX: ${{ inputs.artifact_postfix }}
         run: |
+          if [ "$KISTA_CATALOGUE" = true ]; then args=(--catalogue); else args=(--channel "$KISTA_CHANNEL"); fi
+          if [ -n "$KISTA_ENTRY_SUMMARY" ]; then args+=(--entry-summary "$KISTA_ENTRY_SUMMARY"); fi
+          if [ -n "$KISTA_ICON" ]; then args+=(--icon "caller/$KISTA_ICON"); fi
           python3 extension-ci-tools/scripts/kista_publish.py --url "$KISTA_URL" --tenant "$KISTA_TENANT" \
-            --channel "$KISTA_CHANNEL" --visibility "$KISTA_VISIBILITY" --name "$EXTENSION_NAME" \
+            "${args[@]}" --visibility "$KISTA_VISIBILITY" --name "$EXTENSION_NAME" \
             --postfix="$ARTIFACT_POSTFIX" --summary "$GITHUB_STEP_SUMMARY" artifacts

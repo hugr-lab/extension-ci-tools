@@ -31,7 +31,7 @@ CI. The design is kista's spec 0022 (`specs/0022-developer-kit/spec.md`).
 | `kista/scripts/sdk-test.sh` | Builds DuckDB at the pin with the SDK's test extension, then runs the SDK's tests. |
 | `kista/scripts/kista-vectors.sh` | Copies or checks the vectors against a kista checkout. |
 | `makefiles/kista.Makefile` | Passes `KISTA_LICENSE_KEYS` to the extension's CMake. |
-| `scripts/kista_publish.py` | Publishes built extensions to a kista channel, each request signed with the publisher's SSH key (standard-library Python and OpenSSH). |
+| `scripts/kista_publish.py` | Publishes built extensions to a kista channel or the tenant's catalogue, and sets a catalogue entry's summary and icon, each request signed with the publisher's SSH key (standard-library Python and OpenSSH). |
 | `.github/workflows/_kista_publish.yml` | The reusable publication job. |
 | `.github/workflows/kista.yml` | This fork's own CI for the above. |
 | `.github/workflows/_extension_distribution.yml` | Inputs for Enterest's builders (below). |
@@ -118,6 +118,30 @@ jobs:
 - It uploads each platform's build as it is. kista checks it and signs it with the channel's key,
   so no signing key is needed in CI.
 - It skips wasm builds while kista does not take them, and says so in the job summary.
+- It retries a busy kista (a `429` typed `rate-limited`, `upload-slots` or `ingest-busy`, after its
+  `Retry-After`; a `408`, a `5xx`, a broken connection), signing again. A `429` typed
+  `catalogue-full` or `tenant-limit` clears only when room is made in kista: the job stops there,
+  sends nothing more and fails, and the summary says so.
+
+**Into the catalogue** (kista spec 0033). With `catalogue: true` and no `channel`, the builds go into
+the tenant's catalogue only, placed in no channel: the channels take them by their rules, or an
+administrator places them. A publisher with a hold must publish so (a channel answers it `409`
+`held`), and its builds are held until their time; the summary shows until when. The publisher
+needs `publish` on the extension tenant-wide, which `--check` tests:
+
+```text
+kista admin grant add <tenant> -principal publisher:<publisher> -verb publish -extension myext
+```
+
+(no `-channel`), unless it is a distributor's publisher, which needs no grant.
+
+**The entry's summary and icon** (kista spec 0036). `entry_summary` and `icon` (a path in the
+calling repository, checked out for this alone) set the catalogue entry's metadata once its builds
+are published, with a channel's publication too. The entry's metadata is read and merged: an input
+left empty keeps what kista has, and an icon kista has already is kept by its hash, not sent again;
+nothing is written when nothing changes. The icon is a square PNG of 64 to 512 pixels, at most
+256 KiB, without text, Exif or colour-profile chunks (`oxipng --strip all icon.png` strips them);
+kista names the rule it breaks.
 
 **The publisher key** (kista spec 0023). Each request is signed with the publisher's SSH key, like
 an SSH key on GitHub: kista holds only the public half. Once, for a repository:
@@ -174,9 +198,13 @@ copies it to a private file of its own, in `RUNNER_TEMP` when set, and removes i
 python3 extension-ci-tools/scripts/kista_publish.py --url https://kista.example.org --tenant acme --check
 python3 extension-ci-tools/scripts/kista_publish.py --url https://kista.example.org \
   --tenant acme --channel prod build/release/extension/myext/myext.duckdb_extension
+# into the catalogue, with the entry's summary and icon
+python3 extension-ci-tools/scripts/kista_publish.py --url https://kista.example.org --tenant acme --catalogue \
+  --entry-summary 'Geometry tools' --icon docs/icon.png build/release/extension/myext/myext.duckdb_extension
 ```
 
 `--dry-run` prints the statements it would sign and the key's fingerprint, and sends nothing.
+`--entry-summary ''` or `--icon ''` clears that field.
 
 ## Upstream
 
